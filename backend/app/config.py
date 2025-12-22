@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Define all config settings here
-    allowed_origins: list[str]
+    allowed_origins: str
     
     model_config = {
         "env_file": ".env",

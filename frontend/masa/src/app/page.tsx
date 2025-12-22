@@ -16,7 +16,7 @@ export default function Home() {
     setResponseText('');
 
     try {
-      const res = await fetch('/api/submit', {
+      const res = await fetch('/api/input', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: json,
