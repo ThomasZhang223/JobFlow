@@ -16,23 +16,23 @@ export default function Home() {
     setResponseText('');
 
     try {
-      const res = await fetch('/api/submit', {
+      const res = await fetch('http://localhost:8000/api/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: json,
       });
 
-      // Try to parse JSON response if present
-      let data: any = null;
-      try { data = await res.json(); } catch { data = null; }
-
+      
       if (!res.ok) {
-        const errMsg = data?.message || res.statusText || `HTTP ${res.status}`;
-        throw new Error(errMsg);
+        const errMsg = await res.json();
+        console.log('Server error response:', errMsg);
       }
 
+      // Try to parse JSON response if present
+      let data = await res.json(); 
+
       setStatus('sent');
-      setResponseText(data ? JSON.stringify(data, null, 2) : 'OK');
+      setResponseText(data);
       console.log('Server response:', data);
     } catch (err: any) {
       setStatus('error');
