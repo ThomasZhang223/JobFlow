@@ -7,8 +7,12 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    # Define all config settings here
-    allowed_origins: list[str]
+    # Frontend url
+    allowed_origins: str
+    
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+    scrape_update_chanel: str = "scrape_update"
     
     model_config = {
         "env_file": ".env",
