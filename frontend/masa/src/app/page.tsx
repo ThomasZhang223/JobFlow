@@ -12,7 +12,7 @@ export default function Home() {
   const [messages, setMessages] = useState<string[]>([]);
 
   useEffect(() => {
-    const socket = new WebSocket("ws://localhost:8080");
+    const socket = new WebSocket("ws://localhost:8080/ws/scrape");
     socketRef.current = socket;
 
     socket.onopen = () => {
