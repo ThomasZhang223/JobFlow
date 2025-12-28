@@ -1,9 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 
 router = APIRouter(prefix="/api", tags=['Testing'])
 
-@router.post("/test", response_model=str)
-async def get_text(text: str) -> str:
+@router.post("/test")
+async def get_text(text: str = Body(...)) -> str:
     if len(text) == 0:
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     

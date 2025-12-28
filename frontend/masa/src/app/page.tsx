@@ -9,31 +9,32 @@ export default function Home() {
   const [responseText, setResponseText] = useState('');
 
   const handleSubmit = async () => {
-    const text1 = textbox1;
-    const json = JSON.stringify(text1);
-    setJsonString(json);
     setStatus('sending');
     setResponseText('');
 
     try {
-      const res = await fetch('http://localhost:8000/api/test', {
+      const res = await fetch('http://127.0.0.1:8000/api/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: json,
+        body: JSON.stringify(textbox1),
       });
 
-      
-      if (!res.ok) {
-        const errMsg = await res.json();
-        console.log('Server error response:', errMsg);
+      const data = await res.json();
+
+      if (res.status === 400) {
+        setStatus('error');
+        setResponseText(data.detail || 'Empty text');
+        return;
       }
 
-      // Try to parse JSON response if present
-      let data = await res.json(); 
+      if (!res.ok) {
+        setStatus('error');
+        setResponseText(data.detail || 'Server error');
+        return;
+      }
 
       setStatus('sent');
       setResponseText(data);
-      console.log('Server response:', data);
     } catch (err: any) {
       setStatus('error');
       setResponseText(err?.message || String(err));
