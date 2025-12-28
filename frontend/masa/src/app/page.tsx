@@ -3,55 +3,51 @@
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 
+interface ScrapeUpdate {
+  task_id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  jobs_found: number;
+  error_message?: string;
+}
+
 export default function Home() {
   const socketRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<"connecting" | "open" | "closed">(
     "connecting"
   );
-  const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<string[]>([]);
+  const [updates, setUpdates] = useState<ScrapeUpdate[]>([]);
 
   useEffect(() => {
-    const socket = new WebSocket("ws://localhost:8080/ws/scrape");
+    const socket = new WebSocket("ws://localhost:8000/ws/scrape");
     socketRef.current = socket;
 
     socket.onopen = () => {
       setStatus("open");
-
-      // Initial handshake
-      socket.send(
-        JSON.stringify({
-          type: "handshake",
-          payload: "client-connected",
-        })
-      );
+      console.log("WebSocket connected");
     };
 
     socket.onmessage = (event) => {
-      setMessages((prev) => [...prev, event.data]);
+      try {
+        const data: ScrapeUpdate = JSON.parse(event.data);
+        setUpdates((prev) => [...prev, data]);
+      } catch (e) {
+        console.error("Failed to parse message:", event.data);
+      }
     };
 
-    socket.onerror = (err) => {
-      console.error("WebSocket error:", err);
-    };
-
-    socket.onclose = () => {
+    socket.onclose = (event) => {
+      console.log("WebSocket closed:", event.code, event.reason);
       setStatus("closed");
+    };
+
+    socket.onerror = (error) => {
+      console.error("WebSocket error:", error);
     };
 
     return () => {
       socket.close();
     };
   }, []);
-
-  const sendMessage = () => {
-    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-      return;
-    }
-
-    socketRef.current.send(input);
-    setInput("");
-  };
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
@@ -67,44 +63,28 @@ export default function Home() {
   
         <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
           <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            WebSocket starter
+            JobFlow Scraper
           </h1>
           <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Status: <span className="font-medium">{status}</span>
+            WebSocket Status: <span className="font-medium">{status}</span>
           </p>
         </div>
-  
         <div className="mt-8 flex w-full flex-col gap-4">
-          <div className="h-40 w-full overflow-y-auto rounded border border-zinc-300 dark:border-zinc-700 p-3 text-sm">
-            {messages.length === 0 && (
+          <div className="h-64 w-full overflow-y-auto rounded border border-zinc-300 dark:border-zinc-700 p-3 text-sm">
+            {updates.length === 0 && (
               <p className="text-zinc-500">No messages yet</p>
             )}
-            {messages.map((msg, i) => (
-              <p key={i} className="text-black dark:text-zinc-100">
-                {msg}
-              </p>
+            {updates.map((update, i) => (
+              <pre
+                key={i}
+                className="mb-2 p-2 rounded bg-zinc-100 dark:bg-zinc-800 text-black dark:text-zinc-100 overflow-x-auto"
+              >
+                {JSON.stringify(update, null, 2)}
+              </pre>
             ))}
-          </div>
-  
-          <div className="flex gap-2">
-            <input
-              className="flex-1 rounded border border-zinc-300 dark:border-zinc-700 bg-transparent px-3 py-2 outline-none text-black dark:text-white"
-              placeholder="Type a message…"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") sendMessage();
-              }}
-            />
-            <button
-              className="rounded bg-black px-4 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black"
-              onClick={sendMessage}
-              disabled={status !== "open"}
-            >
-              Send
-            </button>
           </div>
         </div>
       </main>
     </div>
   );
+}

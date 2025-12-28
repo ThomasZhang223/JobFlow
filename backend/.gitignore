@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
 *.so
@@ -49,3 +50,10 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+
+# Environment files
+.env
+*.env
+
+# Keep example
+!.env.example

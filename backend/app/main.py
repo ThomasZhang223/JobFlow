@@ -1,12 +1,57 @@
 from fastapi import FastAPI
-from datetime import datetime
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+from pydantic import ValidationError
 
-app = FastAPI()
+from app.core.config import settings
+from app.api.routers import health, input
+from app.api import websocket
+from app.schemas.messages import ScrapeUpdateMessage
+from app.core.redis_client import redis_client
+from app.core.websocket_manager import websocket_manager
 
+async def handle_scrape_update(message: dict):
+    # Validate message recieved from Celery with schema, then forward to websocket
+    try: 
+        update = ScrapeUpdateMessage.model_validate(message)
+    except ValidationError as e:
+        print(f'Invalid message: {e}')
+    
+    await websocket_manager.broadcast(message=update.model_dump(mode='json'))
+    
+        
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # STARTUP
+    print("\nStart API\n")
+    
+    await redis_client.connect()
+    await redis_client.subscribe(settings.scrape_update_chanel, handle_scrape_update)
+    
+    # MAIN PROGRAM FLOW
+    yield
+    
+    # SHUTDOWN
+    await redis_client.disconnect()
+    print("\nShutdown API\n")
 
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-    }
+app = FastAPI (
+    title = "MASA",
+    description = "Auto job application",
+    version = "1.0.0",
+    lifespan=lifespan,
+)
+
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Endpoints here
+app.include_router(health.router)
+app.include_router(input.router)
+app.include_router(websocket.router)
