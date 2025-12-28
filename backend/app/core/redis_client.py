@@ -25,6 +25,8 @@ class RedisClient:
         try:
             self.redis = Redis.from_url(self.url)
             await self.redis.ping()
+            print(f'Redis connection success at {self.url} \n')
+            
         except Exception as e:
             print(f"Redis Connection failed: {e}")
             self.redis = None
@@ -49,14 +51,13 @@ class RedisClient:
     async def subscribe(self, channel: str, handler: MessageHandler):
         self.pubsub = self.redis.pubsub()
         await self.pubsub.subscribe(channel)
-        
         # Create new async task to prevent liste loop from blocking program flow
         self.subscriber_task = asyncio.create_task(self._listener(handler))
         
     async def _listener(self, handler: MessageHandler):
         try: 
             while True:
-                message = self.pubsub.get_message(
+                message = await self.pubsub.get_message(
                     ignore_subscribe_messages=True, # Redis automatically sends out a subscribe message; ignore
                     timeout=1.0 # System will wait for one second to attempt to read
                     )

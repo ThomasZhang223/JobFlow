@@ -1,4 +1,5 @@
 from fastapi import WebSocket
+import json 
 
 class WebSocketManager:
     
@@ -22,3 +23,5 @@ class WebSocketManager:
             await self.connection.send_json(message)
         except Exception as e:
             print(f'Websocket broadcast error: {e}')
+            
+websocket_manager = WebSocketManager()
