@@ -12,7 +12,7 @@ import json
 # Add indeed_scraper to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'indeed_scraper'))
 
-from indeed_scraper.spiders.indeed_spider import IndeedSpider
+from scraper.indeed_scraper.spiders.indeed_spider import IndeedSpider
 
 
 def run_indeed_spider(query, location, max_results=50, output_file=None):
