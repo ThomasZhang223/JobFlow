@@ -16,7 +16,7 @@ class WebSocketManager:
         self.connection = None
     
     async def broadcast(self, message: dict):
-        if self.connect is None:
+        if self.connection is None:
             print("No websocket connection active")
             return
         try:
