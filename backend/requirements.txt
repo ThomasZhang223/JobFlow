@@ -15,4 +15,3 @@ scrapy-playwright>=0.0.44
 
 # Utilities
 pydantic>=2.12.5
-scrapy>=2.11.0
