@@ -12,7 +12,18 @@ class Settings(BaseSettings):
     
     # Redis
     redis_url: str = "redis://localhost:6379/0"
-    scrape_update_chanel: str = "scrape_update"
+    scrape_update_channel: str = "scrape_update"
+    
+    # Database
+    supabase_url: str
+    supabase_key: str
+    
+    # Email
+    resend_api_key: str
+    
+    # Testing
+    test_user_id : str = 'd1f7418b-f9a5-4adb-b8f9-e5128952a8a2'
+    test_from_email: str = 'onboarding@resend.dev'
     
     model_config = {
         "env_file": ".env",

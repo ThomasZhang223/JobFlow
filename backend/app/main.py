@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.api.routers import health, input
+from app.api.routers import health, scrape
 from app.api import websocket
 from app.schemas.messages import ScrapeUpdateMessage
 from app.core.redis_client import redis_client
@@ -16,6 +16,7 @@ async def handle_scrape_update(message: dict):
         update = ScrapeUpdateMessage.model_validate(message)
     except ValidationError as e:
         print(f'Invalid message: {e}')
+        return
     
     await websocket_manager.broadcast(message=update.model_dump(mode='json'))
     
@@ -26,7 +27,7 @@ async def lifespan(app: FastAPI):
     print("\nStart API\n")
     
     await redis_client.connect()
-    await redis_client.subscribe(settings.scrape_update_chanel, handle_scrape_update)
+    await redis_client.subscribe(settings.scrape_update_channel, handle_scrape_update)
     
     # MAIN PROGRAM FLOW
     yield
@@ -53,5 +54,5 @@ app.add_middleware(
 
 # Endpoints here
 app.include_router(health.router)
-app.include_router(input.router)
+app.include_router(scrape.router)
 app.include_router(websocket.router)
