@@ -60,7 +60,7 @@ class ScraperService:
                 'error': 'error msg' (if failed)
             }
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
         
         try:
             # Validate required fields
