@@ -10,6 +10,9 @@ interface ScrapeUpdate {
   error_message?: string;
   timestamp?: string;
   source?: string;
+  spider_finished?: boolean;
+  page_completed?: number;
+  jobs_from_page?: number;
 }
 
 interface Job {
@@ -114,7 +117,13 @@ export default function JobFlowScraper() {
     socket.onmessage = (event) => {
       try {
         const data: ScrapeUpdate = JSON.parse(event.data);
+        console.log("Received websocket data:", data);
         setUpdates((prev) => [...prev, { ...data, timestamp: new Date().toLocaleTimeString() }]);
+
+        // Reset scraper running state when scrape is completed or failed
+        if (data.status === 'completed' || data.status === 'failed') {
+          setIsScraperRunning(false);
+        }
       } catch (e) {
         console.error("Failed to parse message:", event.data);
       }
@@ -196,10 +205,46 @@ export default function JobFlowScraper() {
     }
   };
 
-  const handleStartScrape = () => {
+  const handleStartScrape = async () => {
+    if (isScraperRunning) return;
+
     setIsScraperRunning(true);
-    // Add logic to trigger scraper
-    setTimeout(() => setIsScraperRunning(false), 3000);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/scrape', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('Scrape started:', result);
+
+      // Add initial update to show scrape has started
+      setUpdates((prev) => [...prev, {
+        ...result,
+        task_id: 'manual-trigger',
+        timestamp: new Date().toLocaleTimeString()
+      }]);
+
+    } catch (error) {
+      console.error('Error starting scrape:', error);
+      setIsScraperRunning(false);
+
+      // Add error update
+      setUpdates((prev) => [...prev, {
+        task_id: 'manual-trigger',
+        status: 'failed' as const,
+        jobs_found: 0,
+        error_message: `Failed to start scrape: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        timestamp: new Date().toLocaleTimeString()
+      }]);
+    }
   };
 
   const toggleSaveJob = (jobId: string) => {
@@ -520,7 +565,7 @@ export default function JobFlowScraper() {
           {/* System Updates */}
           <div className="bg-white rounded-lg shadow-md border-2 border-[#2164F3] p-6">
             <h2 className="text-xl font-semibold text-[#2164F3] mb-4">System Updates</h2>
-            <div className="h-80 overflow-y-auto space-y-2 custom-scrollbar">
+            <div className="h-[450] overflow-y-auto space-y-2 custom-scrollbar">
               {updates.length === 0 ? (
                 <p className="text-[#2164F3] text-sm">No updates yet. Start a scrape to see messages.</p>
               ) : (
@@ -543,6 +588,12 @@ export default function JobFlowScraper() {
                       <span className="text-xs text-[#2164F3]">{update.timestamp}</span>
                     </div>
                     <p className="text-sm text-[#2164F3]">Jobs found: {update.jobs_found}</p>
+                    {update.page_completed !== undefined && update.page_completed !== null && (
+                      <p className="text-xs text-[#2164F3] mt-1">Page completed: {update.page_completed}</p>
+                    )}
+                    {update.jobs_from_page !== undefined && update.jobs_from_page !== null && (
+                      <p className="text-xs text-[#2164F3] mt-1">Jobs from page: {update.jobs_from_page}</p>
+                    )}
                     {update.source && <p className="text-xs text-[#2164F3] mt-1">Source: {update.source}</p>}
                     {update.error_message && (
                       <p className="text-sm text-red-600 mt-1">{update.error_message}</p>

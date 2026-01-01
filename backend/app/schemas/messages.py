@@ -11,8 +11,11 @@ class Status(str, Enum):
 class ScrapeUpdateMessage(BaseModel):
     """
     Message published to Redis when scrape task status changes.
-    Used by: Celery (publish), FastAPI (receive)
+    Used by: Celery (publish), FastAPI (receive), Spider (publish)
     """
     status: Status
     jobs_found: int = 0
     error_message: Optional[str] = None
+    spider_finished: Optional[bool] = None
+    page_completed: Optional[int] = None
+    jobs_from_page: Optional[int] = None

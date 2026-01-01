@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Testing
     test_user_id : str = 'd1f7418b-f9a5-4adb-b8f9-e5128952a8a2'
     test_from_email: str = 'onboarding@resend.dev'
+
+    # Scraper
+    scraper_timeout_seconds: int = 300  # 5 minutes
     
     model_config = {
         "env_file": ".env",

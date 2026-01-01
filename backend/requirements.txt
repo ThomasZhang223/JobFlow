@@ -16,6 +16,7 @@ celery>=5.6.0
 # Scraper
 scrapy>=2.13.4
 scrapy-playwright>=0.0.44
+playwright>=1.57.0
 
 # Utilities
 pydantic>=2.12.5

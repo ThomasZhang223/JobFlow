@@ -16,18 +16,18 @@ class DataCleaningPipeline:
     def process_item(self, item, spider):
         adapter = ItemAdapter(item)
         
-        # Clean text fields
-        text_fields = ['title', 'company_name', 'location', 'salary_text']
+        # Clean text fields (updated to match JobItem schema)
+        text_fields = ['title', 'company_name', 'location', 'salary', 'description']
         for field in text_fields:
             if adapter.get(field):
                 value = adapter[field].strip()
                 value = re.sub(r'\s+', ' ', value)
                 adapter[field] = value
-        
-        # Ensure URL is absolute
-        if adapter.get('application_url'):
-            url = adapter['application_url']
+
+        # Ensure URL is absolute (updated field name)
+        if adapter.get('url'):
+            url = adapter['url']
             if url.startswith('/'):
-                adapter['application_url'] = f'https://www.indeed.com{url}'
+                adapter['url'] = f'https://www.indeed.com{url}'
         
         return item

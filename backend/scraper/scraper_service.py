@@ -1,305 +1,166 @@
 """
-Singleton Scraper Service
-Works with subprocess to run the Indeed spider
+Integrated Scraper Service for JobFlow
+Runs Indeed spider with user preferences and provides real-time updates via Redis
 """
 
-import subprocess
-import json
-import os
-import tempfile
-from datetime import datetime
-from typing import Dict
+import redis
 import sys
+import os
+import json
+import subprocess
+import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# Add paths for imports
+current_dir = os.path.dirname(__file__)
+backend_dir = os.path.join(current_dir, '..')
+
+# Add backend directory to path for app imports
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
+from app.core.config import settings
+from app.schemas.messages import ScrapeUpdateMessage, Status
+from app.schemas.database_tables import Job, ScrapeLength
+from app.services import database_service
 
 
-class ScraperService:
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
-    def __init__(self):
-        if self._initialized:
-            return
-        self._initialized = True
-        self.scraper_path = os.path.join(os.path.dirname(__file__), 'indeed_scraper')
-        self.scraper_parent = os.path.dirname(__file__)  # backend/scraper
-        
-        import shutil
-        self.scrapy_path = shutil.which('scrapy')
-    
-    @classmethod
-    def get_instance(cls):
-        return cls()
-    
-    def scrape_with_preferences(self, preferences: Dict) -> Dict:
-        """
-        Run scraper with preferences dict
-        
-        Args:
-            preferences: {
-                'query': 'python developer',
-                'location': 'NYC',
-                'experience_level': 'entry',  # optional
-                'required_keywords': 'django,react',  # optional
-                'excluded_keywords': 'senior',  # optional
-                'max_results': 20
-            }
-        
-        Returns:
-            {
-                'success': True/False,
-                'jobs_found': 10,
-                'jobs': [...],
-                'time_elapsed': 45.2,
-                'error': 'error msg' (if failed)
-            }
-        """
-        start_time = datetime.now()
-        
-        try:
-            # Validate required fields
-            if not preferences.get('query'):
-                return {
-                    'success': False,
-                    'jobs_found': 0,
-                    'jobs': [],
-                    'error': 'Missing required field: query'
-                }
-            
-            if not preferences.get('location'):
-                return {
-                    'success': False,
-                    'jobs_found': 0,
-                    'jobs': [],
-                    'error': 'Missing required field: location'
-                }
-            
-            # Create temp output file
-            output_file = tempfile.mktemp(suffix='.json')
-            
-            # Build scrapy command
-            cmd = [
-                self.scrapy_path or 'scrapy',
-                'crawl', 'indeed',
-                '-a', f"query={preferences['query']}",
-                '-a', f"location={preferences['location']}",
-                '-a', f"max_results={preferences.get('max_results', 50)}",
-                '-o', output_file
-            ]
-            
-            # Add optional filters
-            if preferences.get('experience_level'):
-                cmd.extend(['-a', f"experience_level={preferences['experience_level']}"])
-            
-            if preferences.get('required_keywords'):
-                cmd.extend(['-a', f"required_keywords={preferences['required_keywords']}"])
-            
-            if preferences.get('excluded_keywords'):
-                cmd.extend(['-a', f"excluded_keywords={preferences['excluded_keywords']}"])
-            
-            # CRITICAL: Set environment variables (same as manual test)
-            env = os.environ.copy()
-            
-            # Set PYTHONPATH to scraper parent directory
-            env['PYTHONPATH'] = self.scraper_parent
-            
-            # Tell Scrapy where settings module is
-            env['SCRAPY_SETTINGS_MODULE'] = 'indeed_scraper.settings'
-            
-            print(f"\n{'='*60}")
-            print(f"Running Scraper")
-            print(f"{'='*60}")
-            print(f"Query: {preferences['query']}")
-            print(f"Location: {preferences['location']}")
-            print(f"Max Results: {preferences.get('max_results', 50)}")
-            print(f"Working dir: {self.scraper_path}")
-            print(f"{'='*60}\n")
-            
-            # Run scraper from indeed_scraper directory
-            result = subprocess.run(
-                cmd,
-                cwd=self.scraper_path,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minute timeout
-                env=env
+def publish_update(message: ScrapeUpdateMessage):
+    """Publish scrape update to Redis for real-time frontend updates"""
+    r = redis.from_url(settings.redis_url)
+    r.publish(settings.scrape_update_channel, message.model_dump_json())
+    r.close()
+
+
+def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdateMessage:
+    """
+    Main function to run scraper with user preferences using subprocess
+    Called by celery_app.py run_scrape task
+
+    Args:
+        user_id: User ID for database storage
+        preferences: Dict with title, location, job_type, salary, description, scrape_length
+
+    Returns:
+        ScrapeUpdateMessage: Final status with job count or error
+    """
+
+    # Determine max_results from scrape_length preference
+    max_results = preferences.get('scrape_length')
+
+    try:
+        # Send initial running status
+        update = ScrapeUpdateMessage(status=Status.RUNNING, jobs_found=0)
+        publish_update(update)
+
+        # Validate required preferences
+        if not preferences.get('title') or not preferences.get('location'):
+            error_msg = "Missing required preferences: title and location must be provided"
+            error_update = ScrapeUpdateMessage(
+                status=Status.FAILED,
+                jobs_found=0,
+                error_message=error_msg
             )
-            
-            # Check if scraper failed
-            if result.returncode != 0:
-                print(f"\n❌ SCRAPER FAILED")
-                print(f"Return code: {result.returncode}")
-                print(f"\nStderr (last 1000 chars):")
-                print(result.stderr[-1000:] if result.stderr else "None")
-                
-                return {
-                    'success': False,
-                    'jobs_found': 0,
-                    'jobs': [],
-                    'error': f"Scraper failed: {result.stderr[-500:] if result.stderr else 'Unknown error'}"
-                }
-            
-            # Read results
-            jobs = []
-            if os.path.exists(output_file):
-                try:
-                    with open(output_file, 'r') as f:
-                        content = f.read()
-                        if content.strip():
-                            jobs = json.loads(content)
-                        else:
-                            print("Warning: Output file is empty")
-                    os.unlink(output_file)  # Clean up temp file
-                except json.JSONDecodeError as e:
-                    print(f"JSON decode error: {e}")
-                    return {
-                        'success': False,
-                        'jobs_found': 0,
-                        'jobs': [],
-                        'error': f"Failed to parse results: {str(e)}"
-                    }
-                except Exception as e:
-                    print(f"Error reading file: {e}")
-                    return {
-                        'success': False,
-                        'jobs_found': 0,
-                        'jobs': [],
-                        'error': f"Failed to read results: {str(e)}"
-                    }
-            else:
-                print(f"Warning: Output file not found: {output_file}")
-            
-            time_elapsed = (datetime.utcnow() - start_time).total_seconds()
-            
-            print(f"\n✅ Scraping complete!")
-            print(f"Jobs found: {len(jobs)}")
-            print(f"Time elapsed: {time_elapsed:.1f}s\n")
-            
-            return {
-                'success': True,
-                'jobs_found': len(jobs),
-                'jobs': jobs,
-                'time_elapsed': time_elapsed,
-                'preferences_used': preferences
-            }
-            
-        except subprocess.TimeoutExpired:
-            return {
-                'success': False,
-                'jobs_found': 0,
-                'jobs': [],
-                'error': 'Scraper timeout after 5 minutes'
-            }
-        except Exception as e:
-            print(f"Exception: {e}")
-            import traceback
-            traceback.print_exc()
-            return {
-                'success': False,
-                'jobs_found': 0,
-                'jobs': [],
-                'error': str(e)
-            }
-    
-    def scrape_for_user(self, user_id: str) -> Dict:
-        """
-        Run scraper using user's saved preferences from database
-        
-        Args:
-            user_id: User ID to fetch preferences
-        
-        Returns:
-            Same as scrape_with_preferences()
-        """
+            publish_update(error_update)
+            return error_update
+
+        # Run spider via subprocess to avoid import conflicts
+        spider_script = os.path.join(current_dir, 'run_spider.py')
+        preferences_json = json.dumps(preferences)
+
+        print(f"Running spider subprocess with preferences: {preferences_json}")
+
+        # Run spider subprocess
+        # Pass only essential settings to subprocess via environment variables
+        env = os.environ.copy()
+        env['REDIS_URL'] = settings.redis_url
+        env['SCRAPE_UPDATE_CHANNEL'] = settings.scrape_update_channel
+        env['SCRAPER_USER_ID'] = user_id  # Pass user_id to subprocess
+        env['SUPABASE_URL'] = settings.supabase_url
+        env['SUPABASE_KEY'] = settings.supabase_key
+
+        # Use Popen for real-time output streaming
+        print("=== STARTING SPIDER SUBPROCESS ===")
+        process = subprocess.Popen([
+            sys.executable, '-u', spider_script,  # -u flag for unbuffered output
+            preferences_json,
+            str(max_results)
+        ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, bufsize=1)
+
+        # Listen for Redis messages from spider to get final job count
+        r = redis.from_url(settings.redis_url)
+        pubsub = r.pubsub()
+        pubsub.subscribe(settings.scrape_update_channel)
+
+        final_job_count = 0
+        spider_completed = False
+
         try:
-            from app.database import db
-            
-            # Fetch user preferences from database
-            preferences = db.get_user_preferences(user_id)
-            
-            if not preferences:
-                return {
-                    'success': False,
-                    'jobs_found': 0,
-                    'jobs': [],
-                    'error': f'No preferences found for user: {user_id}'
-                }
-            
-            # Convert database model to dict
-            prefs_dict = {
-                'query': preferences.query,
-                'location': preferences.location,
-                'experience_level': preferences.experience_level,
-                'required_keywords': preferences.required_keywords,
-                'excluded_keywords': preferences.excluded_keywords,
-                'max_results': preferences.max_results or 50
-            }
-            
-            # Run scraper with these preferences
-            return self.scrape_with_preferences(prefs_dict)
-            
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return {
-                'success': False,
-                'jobs_found': 0,
-                'jobs': [],
-                'error': f'Database error: {str(e)}'
-            }
+            # Poll for both subprocess completion and Redis messages
+            while process.poll() is None and not spider_completed:
+                # Check for Redis messages with timeout
+                message = pubsub.get_message(timeout=1.0)
+                if message and message['type'] == 'message':
+                    try:
+                        update_data = json.loads(message['data'])
+                        print(f"REDIS UPDATE: {update_data}")
 
+                        # Check if this is the final completion message
+                        if update_data.get('spider_finished'):
+                            final_job_count = update_data.get('jobs_found', 0)
+                            spider_completed = True
+                            print(f"Spider finished with {final_job_count} jobs")
+                    except (json.JSONDecodeError, TypeError) as e:
+                        print(f"Failed to parse Redis message: {e}")
 
-# Convenience functions for easy import
-def scrape_with_preferences(preferences: Dict) -> Dict:
-    """Run scraper with preferences dict"""
-    scraper = ScraperService.get_instance()
-    return scraper.scrape_with_preferences(preferences)
+            # Wait for subprocess to complete
+            process.wait(timeout=settings.scraper_timeout_seconds)
+            returncode = process.returncode
 
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            print("=== SPIDER SUBPROCESS TIMED OUT ===")
+            returncode = 1
+        finally:
+            pubsub.close()
+            r.close()
 
-def scrape_for_user(user_id: str) -> Dict:
-    """Run scraper with user's saved preferences"""
-    scraper = ScraperService.get_instance()
-    return scraper.scrape_for_user(user_id)
+        print("=== SPIDER SUBPROCESS FINISHED ===")
 
+        if returncode != 0:
+            error_msg = f"Spider subprocess failed with return code {returncode}"
+            error_update = ScrapeUpdateMessage(
+                status=Status.FAILED,
+                jobs_found=0,
+                error_message=error_msg
+            )
+            return error_update
 
-# For testing
-if __name__ == '__main__':
-    print("=" * 60)
-    print("Testing Scraper Service")
-    print("=" * 60)
-    
-    test_prefs = {
-        'query': 'python developer',
-        'location': 'New York',
-        'max_results': 3
-    }
-    
-    print(f"\nTest preferences: {test_prefs}\n")
-    result = scrape_with_preferences(test_prefs)
-    
-    print(f"\n{'='*60}")
-    print("RESULTS")
-    print(f"{'='*60}")
-    print(f"✓ Success: {result['success']}")
-    print(f"✓ Jobs found: {result['jobs_found']}")
-    print(f"✓ Time: {result.get('time_elapsed', 0):.1f}s")
-    
-    if result['success'] and result['jobs']:
-        print(f"\n📋 Sample Jobs:")
-        for i, job in enumerate(result['jobs'][:3], 1):
-            print(f"\n  Job {i}:")
-            print(f"    Title: {job['title']}")
-            print(f"    Company: {job['company_name']}")
-            print(f"    Location: {job['location']}")
-            if job.get('salary_text'):
-                print(f"    Salary: {job['salary_text']}")
-    elif not result['success']:
-        print(f"\n❌ Error: {result['error']}")
-    
-    print(f"\n{'='*60}\n")
+        # Return final job count from Redis message
+        completion_update = ScrapeUpdateMessage(
+            status=Status.COMPLETED,
+            jobs_found=final_job_count
+        )
+        return completion_update
+
+    except subprocess.TimeoutExpired:
+        error_msg = "Spider timed out after 10 minutes"
+        error_update = ScrapeUpdateMessage(
+            status=Status.FAILED,
+            jobs_found=0,
+            error_message=error_msg
+        )
+        publish_update(error_update)
+        return error_update
+
+    except Exception as e:
+        error_msg = f"Scraper failed: {str(e)}"
+        print(f"Error: {error_msg}")
+
+        error_update = ScrapeUpdateMessage(
+            status=Status.FAILED,
+            jobs_found=0,
+            error_message=error_msg
+        )
+        publish_update(error_update)
+        return error_update

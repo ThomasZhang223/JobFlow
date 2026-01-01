@@ -37,12 +37,6 @@ def delete_job_by_id(user_id: str, job_id: str):
                 .eq("id",job_id) \
                     .execute()
     
-def create_job(user_id: str, job_data: Job):
-    # Adds one job to the database for user
-    job = {'user_id': user_id, **job_data.model_dump(exclude={'id'})}
-    print(f"\nInserting job: {job}")  
-    result = supabase.table('jobs').insert(job).execute()
-    print(f"\nResult: {result}")  
 # ============================================================
 # Preferences
 # ============================================================
