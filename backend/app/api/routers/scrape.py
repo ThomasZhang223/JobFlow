@@ -8,7 +8,7 @@ from worker.celery_app import run_scrape
 router = APIRouter(prefix="/api", tags=['Scraping'])
 
 @router.post("/scrape", response_model=ScrapeUpdateMessage)
-async def scrape() -> dict:
+async def scrape() -> ScrapeUpdateMessage:
     # Testing only
     user_id = settings.test_user_id
     
@@ -20,4 +20,4 @@ async def scrape() -> dict:
     
     update = ScrapeUpdateMessage(status=Status.PENDING, jobs_found=0)
     
-    return update.model_dump()
+    return update

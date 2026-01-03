@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Play, Mail, Clock, MapPin, Briefcase, DollarSign, Search, Filter, X, Bookmark, TrendingUp, AlertCircle, CheckCircle, Target } from "lucide-react";
+import { Play, MapPin, Briefcase, DollarSign, Search, X, Bookmark, Target, History, User, Edit, Save } from "lucide-react";
+import Image from "next/image";
 
 interface ScrapeUpdate {
   task_id: string;
@@ -16,94 +17,281 @@ interface ScrapeUpdate {
 }
 
 interface Job {
-  id: string;
+  id: number;
   title: string;
-  company: string;
+  company_name: string;
   location: string;
-  salary: string;
-  date: string;
-  experience: string;
-  link: string;
-  jobType: string;
-  isNew?: boolean;
-  isSaved?: boolean;
-  matchScore?: number;
+  job_type: string;
+  salary?: string;
+  url: string;
+  description?: string;
+  benefits?: string;
+  priority?: boolean;
 }
 
 interface UserPreferences {
-  experienceLevel: string;
-  jobType: string;
-  jobTitle: string;
-  location: string;
-  salaryRange: [number, number];
-  email: string;
-  hoursInterval: number;
-  sendEmail: boolean;
+  title?: string;
+  company_name?: string;
+  location?: string;
+  job_type?: string;
+  salary?: string;
+  description?: string;
+  benefits?: string;
+  radius?: number;
+  scrape_length?: number;
+}
+
+interface UserStatistics {
+  total_jobs: number;
+  current_jobs: number;
+  saved_jobs: number;
+  completed_jobs: number;
+  total_scrapes: number;
+  latest_scrape?: string;
 }
 
 // Default preferences
 const DEFAULT_PREFERENCES: UserPreferences = {
-  experienceLevel: "Entry Level",
-  jobType: "Full-time",
-  jobTitle: "Software Engineer",
-  location: "Toronto, ON",
-  salaryRange: [70000, 120000],
-  email: "",
-  hoursInterval: 24,
-  sendEmail: true,
+  title: "",
+  company_name: "",
+  location: "",
+  job_type: "",
+  salary: "",
+  description: "",
+  benefits: "",
+  radius: undefined,
+  scrape_length: 150, // MEDIUM
 };
 
 export default function JobFlowScraper() {
   const socketRef = useRef<WebSocket | null>(null);
-  const [status, setStatus] = useState<"connecting" | "open" | "closed">("connecting");
   const [updates, setUpdates] = useState<ScrapeUpdate[]>([]);
   const [isScraperRunning, setIsScraperRunning] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userEmail, setUserEmail] = useState("");
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState("");
 
-  // User preferences with localStorage
-  const [preferences, setPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
-  const [draftPreferences, setDraftPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
-
-
-  const [emailError, setEmailError] = useState("");
+  // New UI state for navigation
+  const [activePage, setActivePage] = useState("home");
   const [isEditingPreferences, setIsEditingPreferences] = useState(false);
 
-  // Analytics
-  const [stats, setStats] = useState({
-    totalJobs: 245,
-    newToday: 12,
-    averageMatch: 78,
-    savedJobs: 8,
+  // User preferences
+  const [draftPreferences, setDraftPreferences] = useState<UserPreferences>(DEFAULT_PREFERENCES);
+  const [preferencesError, setPreferencesError] = useState("");
+
+  // User Statistics
+  const [userStats, setUserStats] = useState<UserStatistics>({
+    total_jobs: 0,
+    current_jobs: 0,
+    saved_jobs: 0,
+    completed_jobs: 0,
+    total_scrapes: 0,
+    latest_scrape: undefined
   });
 
-  // Job history
-  const [jobs, setJobs] = useState<Job[]>([
-    { id: "1", title: "Frontend Developer", company: "Tech Corp", location: "Toronto, ON", salary: "$70k-90k", date: "2024-12-28 14:30", experience: "Entry Level", link: "https://techcorp.com/jobs/123", jobType: "Full-time", isNew: true, matchScore: 92 },
-    { id: "2", title: "Software Engineer", company: "StartupXYZ", location: "Remote", salary: "$80k-100k", date: "2024-12-27 10:15", experience: "Mid Level", link: "https://startupxyz.com/careers/456", jobType: "Full-time", matchScore: 85, isSaved: true },
-    { id: "3", title: "Junior Developer", company: "Innovation Labs", location: "Toronto, ON", salary: "$60k-75k", date: "2024-12-26 09:45", experience: "Entry Level", link: "https://innovationlabs.com/jobs/789", jobType: "Contract", matchScore: 71 },
-    { id: "4", title: "React Developer", company: "Digital Agency", location: "Toronto, ON", salary: "$75k-95k", date: "2024-12-28 16:20", experience: "Entry Level", link: "https://digitalagency.com/jobs/321", jobType: "Full-time", isNew: true, matchScore: 88 },
-  ]);
+  // Job state
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [savedJobs, setSavedJobs] = useState<Job[]>([]);
 
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterVisible, setFilterVisible] = useState(false);
+  const [savedJobsSearchTerm, setSavedJobsSearchTerm] = useState("");
 
-  // Load preferences from localStorage on mount
-  useEffect(() => {
+  // Navigation items for sidebar
+  const navigationItems = [
+    { id: "home", label: "Dashboard", icon: User },
+    { id: "history", label: "Job History", icon: History },
+    { id: "saved", label: "Saved Jobs", icon: Bookmark },
+    { id: "scrape", label: "Scrape Jobs", icon: Play },
+  ];
+
+  // Fetch user preferences from API
+  const fetchUserPreferences = async () => {
     try {
-      const savedPreferences = localStorage.getItem('jobflow_preferences');
-      if (savedPreferences) {
-        const parsed = JSON.parse(savedPreferences);
-        setPreferences(parsed);
+      const response = await fetch('http://localhost:8000/api/get_preferences');
+      if (response.ok) {
+        const prefs = await response.json();
+        setDraftPreferences(prefs);
+      } else {
+        console.error('Failed to fetch user preferences:', response.statusText);
       }
     } catch (error) {
-      console.error('Error loading preferences from localStorage:', error);
+      console.error('Error fetching user preferences:', error);
     }
+  };
+
+  // Save user preferences to API
+  const saveUserPreferences = async (prefsToSave: UserPreferences) => {
+    try {
+      const response = await fetch('http://localhost:8000/api/update_preferences', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(prefsToSave),
+      });
+
+      if (response.ok) {
+        setDraftPreferences(prefsToSave);
+        setIsEditingPreferences(false);
+        setPreferencesError("");
+      } else {
+        const errorData = await response.json();
+        setPreferencesError(errorData.detail || 'Failed to save preferences');
+      }
+    } catch (error) {
+      console.error('Error saving preferences:', error);
+      setPreferencesError('Error saving preferences. Please try again.');
+    }
+  };
+
+  // Load preferences from API on mount
+  useEffect(() => {
+    fetchUserPreferences();
+  }, []);
+
+  // Fetch user statistics
+  const fetchUserStatistics = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/get_statistics');
+      if (response.ok) {
+        const stats = await response.json();
+        setUserStats(stats);
+      } else {
+        console.error('Failed to fetch user statistics:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error fetching user statistics:', error);
+    }
+  };
+
+  // Load user statistics on mount
+  useEffect(() => {
+    fetchUserStatistics();
+  }, []);
+
+  // Job API functions
+  const fetchJobs = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/get_jobs');
+      if (response.ok) {
+        const jobsList = await response.json();
+        setJobs(jobsList || []);
+      } else {
+        console.error('Failed to fetch jobs:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error fetching jobs:', error);
+    }
+  };
+
+  const fetchSavedJobs = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/get_priority_jobs');
+      if (response.ok) {
+        const savedJobsList = await response.json();
+        setSavedJobs(savedJobsList || []);
+      } else {
+        console.error('Failed to fetch saved jobs:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error fetching saved jobs:', error);
+    }
+  };
+
+  const searchJobs = async (query: string) => {
+    if (!query.trim()) {
+      fetchJobs();
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://localhost:8000/api/search_jobs?q=${encodeURIComponent(query)}`);
+      if (response.ok) {
+        const searchResults = await response.json();
+        setJobs(searchResults || []);
+      } else {
+        console.error('Failed to search jobs:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error searching jobs:', error);
+    }
+  };
+
+  const toggleJobPriority = async (jobId: number) => {
+    // Optimistically update the selected job's priority immediately
+    if (selectedJob && selectedJob.id === jobId) {
+      setSelectedJob({ ...selectedJob, priority: !selectedJob.priority });
+    }
+
+    try {
+      const response = await fetch(`http://localhost:8000/api/toggle_job_priority/${jobId}`, {
+        method: 'PUT',
+      });
+      if (response.ok) {
+        // Refresh both job lists
+        fetchJobs();
+        fetchSavedJobs();
+        fetchUserStatistics(); // Update statistics
+      } else {
+        console.error('Failed to toggle job priority:', response.statusText);
+        // Revert the optimistic update on error
+        if (selectedJob && selectedJob.id === jobId) {
+          setSelectedJob({ ...selectedJob, priority: !selectedJob.priority });
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling job priority:', error);
+      // Revert the optimistic update on error
+      if (selectedJob && selectedJob.id === jobId) {
+        setSelectedJob({ ...selectedJob, priority: !selectedJob.priority });
+      }
+    }
+  };
+
+  const deleteJob = async (jobId: number) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/delete_job_by_id/${jobId}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        // Refresh both job lists
+        fetchJobs();
+        fetchSavedJobs();
+        fetchUserStatistics(); // Update statistics
+        // Close modal if the deleted job was selected
+        if (selectedJob && selectedJob.id === jobId) {
+          setSelectedJob(null);
+        }
+      } else {
+        console.error('Failed to delete job:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error deleting job:', error);
+    }
+  };
+
+  const completeJob = async (jobId: number) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/job_complete/${jobId}`);
+      if (response.ok) {
+        // Refresh both job lists
+        fetchJobs();
+        fetchSavedJobs();
+        fetchUserStatistics(); // Update statistics
+        // Close modal if the completed job was selected
+        if (selectedJob && selectedJob.id === jobId) {
+          setSelectedJob(null);
+        }
+      } else {
+        console.error('Failed to complete job:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error completing job:', error);
+    }
+  };
+
+  // Load jobs on mount
+  useEffect(() => {
+    fetchJobs();
+    fetchSavedJobs();
   }, []);
 
   useEffect(() => {
@@ -111,7 +299,7 @@ export default function JobFlowScraper() {
     socketRef.current = socket;
 
     socket.onopen = () => {
-      setStatus("open");
+      console.log("WebSocket connected");
     };
 
     socket.onmessage = (event) => {
@@ -123,86 +311,33 @@ export default function JobFlowScraper() {
         // Reset scraper running state when scrape is completed or failed
         if (data.status === 'completed' || data.status === 'failed') {
           setIsScraperRunning(false);
+          // Refresh user statistics and jobs after scrape completion
+          if (data.status === 'completed') {
+            fetchUserStatistics();
+            fetchJobs();
+            fetchSavedJobs();
+          }
         }
       } catch (e) {
         console.error("Failed to parse message:", event.data);
       }
     };
 
-    socket.onclose = () => setStatus("closed");
+    socket.onclose = () => console.log("WebSocket disconnected");
     socket.onerror = (error) => console.error("WebSocket error:", error);
 
     return () => socket.close();
   }, []);
 
-  const validateEmail = (email: string) => {
-    const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return regex.test(email);
-  };
-
-  const handleEmailChange = (email: string) => {
-    setPreferences({ ...preferences, email });
-    if (email && !validateEmail(email)) {
-      setEmailError("Invalid email format");
-    } else {
-      setEmailError("");
-    }
-  };
-
-  const handleSalaryChange = (index: number, value: number) => {
-    const newRange: [number, number] = [...preferences.salaryRange] as [number, number];
-    newRange[index] = value;
-
-    // Ensure min doesn't exceed max and vice versa
-    if (index === 0 && value > newRange[1]) {
-      newRange[1] = value;
-    } else if (index === 1 && value < newRange[0]) {
-      newRange[0] = value;
-    }
-
-    setPreferences({ ...preferences, salaryRange: newRange });
-  };
-
-  const formatSalary = (value: number) => {
-    return `${(value / 1000).toFixed(0)}k`;
-  };
-
-  // Save preferences to localStorage
+  // Save preferences
   const handleSavePreferences = () => {
-    // Validate email if provided
-    if (preferences.email && !validateEmail(preferences.email)) {
-      setEmailError("Please enter a valid email address");
+    // Basic validation
+    if (!draftPreferences.title || !draftPreferences.location) {
+      setPreferencesError("Title and location are required");
       return;
     }
 
-    // Validate salary range
-    if (preferences.salaryRange[0] < 0 || preferences.salaryRange[1] < 0) {
-      alert("Salary values must be positive");
-      return;
-    }
-
-    if (preferences.salaryRange[0] > preferences.salaryRange[1]) {
-      alert("Minimum salary cannot exceed maximum salary");
-      return;
-    }
-
-    // Validate hours interval
-    if (preferences.hoursInterval < 1 || preferences.hoursInterval > 168) {
-      alert("Hours interval must be between 1 and 168 hours");
-      return;
-    }
-
-    try {
-      // Save to localStorage
-      localStorage.setItem('jobflow_preferences', JSON.stringify(preferences));
-
-      // Close edit mode
-      setIsEditingPreferences(false);
-      setEmailError("");
-    } catch (error) {
-      console.error('Error saving preferences to localStorage:', error);
-      alert("Failed to save preferences. Please try again.");
-    }
+    saveUserPreferences(draftPreferences);
   };
 
   const handleStartScrape = async () => {
@@ -219,7 +354,9 @@ export default function JobFlowScraper() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        const errorDetail = errorData.detail || `HTTP error! status: ${response.status}`;
+        throw new Error(errorDetail);
       }
 
       const result = await response.json();
@@ -236,637 +373,654 @@ export default function JobFlowScraper() {
       console.error('Error starting scrape:', error);
       setIsScraperRunning(false);
 
+      let errorMessage = 'Unknown error';
+      if (error instanceof Error) {
+        if (error.message.includes('No preferences set')) {
+          errorMessage = 'Please set your Job Title and Location in Preferences before starting a scrape';
+        } else {
+          errorMessage = error.message;
+        }
+      }
+
       // Add error update
       setUpdates((prev) => [...prev, {
         task_id: 'manual-trigger',
         status: 'failed' as const,
         jobs_found: 0,
-        error_message: `Failed to start scrape: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error_message: `Failed to start scrape: ${errorMessage}`,
         timestamp: new Date().toLocaleTimeString()
       }]);
     }
   };
 
-  const toggleSaveJob = (jobId: string) => {
-    setJobs(jobs.map(job =>
-      job.id === jobId ? { ...job, isSaved: !job.isSaved } : job
-    ));
-  };
+  // Handle search with debouncing
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (searchTerm.trim()) {
+        searchJobs(searchTerm);
+      } else {
+        fetchJobs();
+      }
+    }, 300);
 
-  const filteredJobs = jobs.filter(job =>
-    job.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    job.company.toLowerCase().includes(searchTerm.toLowerCase())
+    return () => clearTimeout(timeoutId);
+  }, [searchTerm]);
+
+  // Filter saved jobs locally
+  const filteredSavedJobs = savedJobs.filter(job =>
+    job.title.toLowerCase().includes(savedJobsSearchTerm.toLowerCase()) ||
+    job.company_name.toLowerCase().includes(savedJobsSearchTerm.toLowerCase()) ||
+    job.location.toLowerCase().includes(savedJobsSearchTerm.toLowerCase())
   );
 
+  const stats = [
+    { label: "Total Jobs", value: userStats.total_jobs.toString() },
+    { label: "Current Jobs", value: userStats.current_jobs.toString() },
+    { label: "Saved Jobs", value: userStats.saved_jobs.toString() },
+    { label: "Completed", value: userStats.completed_jobs.toString() },
+    { label: "Total Scrapes", value: userStats.total_scrapes.toString() },
+    { label: "Last Scrape", value: userStats.latest_scrape ? new Date(userStats.latest_scrape).toLocaleDateString() : 'Never' },
+  ];
+
   return (
-    <div className="min-h-screen bg-white p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <h1 className="text-4xl font-bold text-[#2164F3] tracking-tight">JobFlow</h1>
+    <div className="flex h-screen bg-gray-50 overflow-hidden">
+      {/* Sidebar */}
+      <aside className="w-64 border-r border-gray-200 bg-white flex flex-col">
+        <div className="flex h-16 items-center gap-2 border-b border-gray-200 px-6 flex-shrink-0">
+          <Image
+            src="/Adobe Express - file.png"
+            alt="JobFlow Logo"
+            width={32}
+            height={32}
+            className="rounded-lg"
+          />
+          <span className="text-lg font-semibold text-gray-900">JobFlow</span>
+        </div>
 
-          <div className="flex items-center gap-4">
-            {/* Connection Status */}
-            <div className="flex items-center gap-2 text-sm">
-              <div className={`w-2 h-2 rounded-full ${status === 'open' ? 'bg-green-500' : 'bg-red-500'}`} />
-              <span className="text-[#2c2c2c]">
-                {status === 'open' ? 'Connected' : 'Disconnected'}
-              </span>
-            </div>
-
-            {/* Login Section */}
-            {!isLoggedIn ? (
+        <nav className="flex flex-col gap-1 p-4 flex-1">
+          {navigationItems.map((item) => {
+            const Icon = item.icon;
+            return (
               <button
-                onClick={() => {
-                  setShowLoginModal(true);
-                }}
-                className="bg-[#2164F3] hover:bg-[#1a4ec7] text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+                key={item.id}
+                onClick={() => setActivePage(item.id)}
+                className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                  activePage === item.id
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                }`}
               >
-                Log in
+                <Icon className="h-5 w-5" />
+                {item.label}
               </button>
-            ) : (
-              <div className="flex items-center gap-3">
-                <span className="text-sm text-[#2164F3] font-medium">
-                  {userEmail}
-                </span>
-                <button
-                  onClick={() => {
-                    setIsLoggedIn(false);
-                    setUserEmail("");
-                  }}
-                  className="text-sm border-2 border-[#2164F3] text-[#2164F3] px-3 py-1.5 rounded-lg hover:bg-blue-50 transition-colors"
-                >
-                  Log out
-                </button>
+            );
+          })}
+        </nav>
+
+        <div className="border-t border-gray-200 px-6 py-4 flex-shrink-0">
+          <p className="text-xs text-gray-500 text-center">Copyright © 2026 JobFlow. All rights reserved.</p>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 h-full flex flex-col overflow-hidden">
+        <div className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-7xl h-full p-6 lg:p-8">
+            {activePage === "home" && (
+              <div className="flex flex-col h-full justify-center">
+                <div className="text-center space-y-4 mb-16">
+                  <div className="flex justify-center mb-6">
+                    <Image
+                      src="/Adobe Express - file.png"
+                      alt="JobFlow Logo"
+                      width={120}
+                      height={120}
+                      className="rounded-2xl"
+                    />
+                  </div>
+                  <h1 className="text-5xl font-bold tracking-tight text-balance">Welcome back</h1>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6 max-w-5xl mx-auto">
+                  {stats.map((stat) => (
+                    <div key={stat.label} className="bg-white rounded-lg shadow-sm border border-gray-200 text-center p-4 flex flex-col justify-center">
+                      <div className="pb-2">
+                        <h3 className={`font-bold text-gray-900 ${stat.label === 'Last Scrape' ? 'text-xl' : 'text-3xl'}`}>{stat.value}</h3>
+                      </div>
+                      <div>
+                        <p className={`font-medium text-gray-600 leading-tight ${stat.label === 'Last Scrape' ? 'text-[10px]' : 'text-xs'}`}>{stat.label}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {activePage === "history" && (
+              <div className="flex flex-col h-full">
+                <div className="space-y-2 flex-shrink-0">
+                  <h1 className="text-3xl font-bold tracking-tight">Job History</h1>
+                  <p className="text-gray-600">All jobs discovered and tracked by JobFlow</p>
+                </div>
+
+                <div className="flex gap-3 mt-6 flex-shrink-0">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                    <input
+                      className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="Search by title, company, or location..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto mt-6 space-y-3">
+                  {jobs.length === 0 ? (
+                    <div className="bg-white rounded-lg shadow-sm border border-gray-200 flex items-center justify-center py-12">
+                      <div className="text-center">
+                        <p className="text-gray-500">No jobs available</p>
+                        <p className="text-gray-400 text-sm mt-2">Try starting a scrape to find jobs</p>
+                      </div>
+                    </div>
+                  ) : (
+                    jobs.map((job) => (
+                      <div key={job.id} className={`${job.priority ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'} rounded-lg shadow-sm transition-shadow hover:shadow-md`}>
+                        <div className="p-6">
+                          <div className="flex items-start justify-between">
+                            <div className="space-y-2 flex-1">
+                              <div className="flex items-start justify-between">
+                                <div>
+                                  <h3 className="text-lg font-semibold text-gray-900">{job.title}</h3>
+                                  <p className="text-sm text-gray-600">{job.company_name}</p>
+                                </div>
+                                {job.priority && (
+                                  <span className="rounded-full px-3 py-1 text-xs font-medium bg-blue-100 text-blue-800">
+                                    Priority
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-4 text-sm text-gray-600">
+                                <span className="flex items-center gap-1.5">
+                                  <MapPin className="h-4 w-4" />
+                                  {job.location}
+                                </span>
+                                {job.salary && (
+                                  <span className="flex items-center gap-1.5">
+                                    <DollarSign className="h-4 w-4" />
+                                    {job.salary}
+                                  </span>
+                                )}
+                                <span className="flex items-center gap-1.5">
+                                  <Briefcase className="h-4 w-4" />
+                                  {job.job_type}
+                                </span>
+                              </div>
+                              <div className="flex gap-2 pt-2">
+                                <button
+                                  onClick={() => window.open(job.url, '_blank')}
+                                  className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
+                                >
+                                  Apply Now
+                                </button>
+                                <button
+                                  onClick={() => setSelectedJob(job)}
+                                  className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+                                >
+                                  View Details
+                                </button>
+                                <button
+                                  onClick={() => toggleJobPriority(job.id)}
+                                  className="p-1.5 text-gray-400 hover:text-blue-500 rounded-md transition-colors"
+                                >
+                                  <Bookmark className={`h-4 w-4 ${job.priority ? 'fill-blue-500 text-blue-500' : ''}`} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activePage === "saved" && (
+              <div className="flex flex-col h-full">
+                <div className="space-y-2 flex-shrink-0">
+                  <h1 className="text-3xl font-bold tracking-tight">Saved Jobs</h1>
+                  <p className="text-gray-600">Jobs you've bookmarked for later review</p>
+                </div>
+
+                <div className="flex gap-3 mt-6 flex-shrink-0">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                    <input
+                      className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="Search by title, company, or location..."
+                      value={savedJobsSearchTerm}
+                      onChange={(e) => setSavedJobsSearchTerm(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {filteredSavedJobs.length > 0 ? (
+                  <div className="flex-1 overflow-y-auto mt-6 space-y-3">
+                    {filteredSavedJobs.map((job) => (
+                      <div key={job.id} className="bg-blue-50 rounded-lg shadow-sm border border-blue-200 transition-shadow hover:shadow-md">
+                        <div className="p-6">
+                          <div className="flex items-start justify-between">
+                            <div className="space-y-2 flex-1">
+                              <div>
+                                <h3 className="text-lg font-semibold text-gray-900">{job.title}</h3>
+                                <p className="text-sm text-gray-600">{job.company_name}</p>
+                              </div>
+                              <div className="flex flex-wrap gap-4 text-sm text-gray-600">
+                                <span className="flex items-center gap-1.5">
+                                  <MapPin className="h-4 w-4" />
+                                  {job.location}
+                                </span>
+                                {job.salary && (
+                                  <span className="flex items-center gap-1.5">
+                                    <DollarSign className="h-4 w-4" />
+                                    {job.salary}
+                                  </span>
+                                )}
+                                <span className="flex items-center gap-1.5">
+                                  <Briefcase className="h-4 w-4" />
+                                  {job.job_type}
+                                </span>
+                              </div>
+                              <div className="flex gap-2 pt-2">
+                                <button
+                                  onClick={() => window.open(job.url, '_blank')}
+                                  className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
+                                >
+                                  Apply Now
+                                </button>
+                                <button
+                                  onClick={() => setSelectedJob(job)}
+                                  className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+                                >
+                                  View Details
+                                </button>
+                                <button
+                                  onClick={() => toggleJobPriority(job.id)}
+                                  className="p-1.5 text-blue-500 hover:text-blue-600 rounded-md transition-colors"
+                                >
+                                  <Bookmark className="h-4 w-4 fill-current" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-lg shadow-sm border border-gray-200 flex-1 flex items-center justify-center mt-6">
+                    <div className="flex flex-col items-center justify-center py-12">
+                      <Bookmark className="h-12 w-12 text-gray-400 mb-4" />
+                      <p className="text-gray-500">No saved jobs yet</p>
+                      <p className="text-gray-400 text-sm mt-2">Click the bookmark icon on jobs to save them here</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activePage === "scrape" && (
+              <div className="flex flex-col h-full">
+                <div className="flex items-center justify-between flex-shrink-0">
+                  <div className="space-y-2">
+                    <h1 className="text-3xl font-bold tracking-tight">Scrape Jobs</h1>
+                    <p className="text-gray-600">
+                      Configure and run job scraping to discover new opportunities
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => isEditingPreferences ? handleSavePreferences() : setIsEditingPreferences(true)}
+                    className={`flex items-center gap-2 px-4 py-2 text-sm rounded-md transition-colors ${
+                      isEditingPreferences
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                        : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                    }`}
+                  >
+                    {isEditingPreferences ? (
+                      <>
+                        <Save className="h-4 w-4" />
+                        Save
+                      </>
+                    ) : (
+                      <>
+                        <Edit className="h-4 w-4" />
+                        Edit
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <div className="grid gap-6 lg:grid-cols-2 mt-6 flex-1 items-start">
+                  <div className="space-y-6">
+                    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+                      <div className="p-6 border-b border-gray-200">
+                        <h3 className="text-lg font-semibold">Job Scraper</h3>
+                        <p className="text-gray-600 text-sm">Define what jobs you're looking for</p>
+                      </div>
+                      <div className="p-6 space-y-4">
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-gray-700">Job Title</label>
+                          <input
+                            value={draftPreferences.title || ""}
+                            onChange={(e) => setDraftPreferences({ ...draftPreferences, title: e.target.value })}
+                            disabled={!isEditingPreferences}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
+                            placeholder="e.g., Software Engineer, Product Manager"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-gray-700">Location</label>
+                          <input
+                            value={draftPreferences.location || ""}
+                            onChange={(e) => setDraftPreferences({ ...draftPreferences, location: e.target.value })}
+                            disabled={!isEditingPreferences}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
+                            placeholder="e.g., San Francisco, Remote"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-gray-700">Scrape Length</label>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                const newPreferences = { ...draftPreferences, scrape_length: 50 };
+                                setDraftPreferences(newPreferences);
+                                saveUserPreferences(newPreferences);
+                              }}
+                              className={`flex-1 px-3 py-2 text-sm rounded-md transition-colors ${
+                                draftPreferences.scrape_length === 50
+                                  ? "bg-blue-600 text-white"
+                                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                              }`}
+                            >
+                              Short (50 jobs)
+                            </button>
+                            <button
+                              onClick={() => {
+                                const newPreferences = { ...draftPreferences, scrape_length: 150 };
+                                setDraftPreferences(newPreferences);
+                                saveUserPreferences(newPreferences);
+                              }}
+                              className={`flex-1 px-3 py-2 text-sm rounded-md transition-colors ${
+                                draftPreferences.scrape_length === 150
+                                  ? "bg-blue-600 text-white"
+                                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                              }`}
+                            >
+                              Medium (150 jobs)
+                            </button>
+                            <button
+                              onClick={() => {
+                                const newPreferences = { ...draftPreferences, scrape_length: 250 };
+                                setDraftPreferences(newPreferences);
+                                saveUserPreferences(newPreferences);
+                              }}
+                              className={`flex-1 px-3 py-2 text-sm rounded-md transition-colors ${
+                                draftPreferences.scrape_length === 250
+                                  ? "bg-blue-600 text-white"
+                                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                              }`}
+                            >
+                              Long (250 jobs)
+                            </button>
+                          </div>
+                        </div>
+
+                        {preferencesError && (
+                          <div className="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                            {preferencesError}
+                          </div>
+                        )}
+
+
+                        <button
+                          onClick={handleStartScrape}
+                          disabled={isScraperRunning}
+                          className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-md transition-colors"
+                        >
+                          {isScraperRunning ? "Scraping..." : "Start Scrape"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+                      <div className="p-6 border-b border-gray-200">
+                        <h3 className="text-lg font-semibold">System Updates</h3>
+                        <p className="text-gray-600 text-sm">Recent activity and system notifications</p>
+                      </div>
+                      <div className="p-5">
+                        <div className="space-y-4 h-[97px] max-h-[97px] overflow-y-auto">
+                          {updates.length === 0 ? (
+                            <p className="text-gray-500 text-sm">No updates yet. Start a scrape to see messages.</p>
+                          ) : (
+                            updates.slice().reverse().map((update, i) => (
+                              <div key={i} className="flex gap-4 text-sm">
+                                <div className={`h-2 w-2 rounded-full mt-1.5 flex-shrink-0 ${
+                                  update.status === 'completed' ? 'bg-green-500' :
+                                  update.status === 'failed' ? 'bg-red-500' :
+                                  update.status === 'running' ? 'bg-blue-500' :
+                                  'bg-gray-400'
+                                }`} />
+                                <div>
+                                  <p className="font-medium text-gray-900">{update.jobs_found} jobs found</p>
+                                  <p className="text-gray-600">Status: {update.status.toUpperCase()}</p>
+                                  {update.error_message && (
+                                    <p className="text-red-600">{update.error_message}</p>
+                                  )}
+                                  <p className="text-xs text-gray-500 mt-1">{update.timestamp}</p>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+                    <div className="p-6 border-b border-gray-200">
+                      <h3 className="text-lg font-semibold">Search Preferences</h3>
+                      <p className="text-gray-600 text-sm">Advanced filters to narrow your search</p>
+                    </div>
+                    <div className="p-6 space-y-6">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Company Name</label>
+                        <input
+                          value={draftPreferences.company_name || ""}
+                          onChange={(e) => setDraftPreferences({ ...draftPreferences, company_name: e.target.value })}
+                          disabled={!isEditingPreferences}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
+                          placeholder="e.g., Google, Microsoft"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Job Type</label>
+                        <input
+                          value={draftPreferences.job_type || ""}
+                          onChange={(e) => setDraftPreferences({ ...draftPreferences, job_type: e.target.value })}
+                          disabled={!isEditingPreferences}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
+                          placeholder="e.g., Full-time, Contract"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Salary</label>
+                        <input
+                          value={draftPreferences.salary || ""}
+                          onChange={(e) => setDraftPreferences({ ...draftPreferences, salary: e.target.value })}
+                          disabled={!isEditingPreferences}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
+                          placeholder="e.g., $100k-$150k"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Description Keywords</label>
+                        <input
+                          value={draftPreferences.description || ""}
+                          onChange={(e) => setDraftPreferences({ ...draftPreferences, description: e.target.value })}
+                          disabled={!isEditingPreferences}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
+                          placeholder="e.g., Git, AWS"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Benefits</label>
+                        <input
+                          value={draftPreferences.benefits || ""}
+                          onChange={(e) => setDraftPreferences({ ...draftPreferences, benefits: e.target.value })}
+                          disabled={!isEditingPreferences}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
+                          placeholder="e.g., Insurance, Dental"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Search Radius (km)</label>
+                        <input
+                          type="number"
+                          value={draftPreferences.radius || ""}
+                          onChange={(e) => setDraftPreferences({ ...draftPreferences, radius: e.target.value ? parseInt(e.target.value) : undefined })}
+                          disabled={!isEditingPreferences}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
+                          placeholder="e.g., 50"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>
         </div>
+      </main>
 
-
-        {/* Start Scrape Button */}
-        <div className="relative">
-          <div className="absolute -inset-1 bg-gradient-to-r from-[#2164F3] via-[#1a4ec7] to-[#2164F3] rounded-lg blur opacity-75 group-hover:opacity-100 transition duration-1000 animate-pulse"></div>
-          <button
-            onClick={handleStartScrape}
-            disabled={isScraperRunning}
-            className="relative w-full bg-gradient-to-r from-[#2164F3] to-[#1a4ec7] hover:from-[#1a4ec7] hover:to-[#2164F3] py-6 rounded-lg font-black text-2xl flex items-center justify-center gap-4 transition-all duration-300 disabled:opacity-50 shadow-2xl transform hover:scale-[1.02] active:scale-[0.98] border-2 border-white/20"
-          >
-            <Play className="w-8 h-8 fill-white stroke-white" />
-            <span className="text-white" style={{ textShadow: '2px 2px 8px rgba(0,0,0,0.9), 0 0 20px rgba(255,255,255,0.3)' }}>
-              {isScraperRunning ? "SCRAPING IN PROGRESS..." : "START SCRAPE"}
-            </span>
-          </button>
-        </div>
-
-        {/* Stats Dashboard */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg shadow-md border-2 border-[#2164F3] p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Briefcase className="w-5 h-5 text-[#2164F3]" />
-              <span className="text-sm text-[#2164F3] font-medium">Total Jobs</span>
-            </div>
-            <p className="text-3xl font-bold text-[#2164F3]">{stats.totalJobs}</p>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-md border-2 border-[#2164F3] p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <TrendingUp className="w-5 h-5 text-[#2164F3]" />
-              <span className="text-sm text-[#2164F3] font-medium">New Today</span>
-            </div>
-            <p className="text-3xl font-bold text-[#2164F3]">{stats.newToday}</p>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-md border-2 border-[#2164F3] p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Target className="w-5 h-5 text-[#2164F3]" />
-              <span className="text-sm text-[#2164F3] font-medium">Avg Match</span>
-            </div>
-            <p className="text-3xl font-bold text-[#2164F3]">{stats.averageMatch}%</p>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-md border-2 border-[#2164F3] p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Bookmark className="w-5 h-5 text-[#2164F3]" />
-              <span className="text-sm text-[#2164F3] font-medium">Saved Jobs</span>
-            </div>
-            <p className="text-3xl font-bold text-[#2164F3]">{stats.savedJobs}</p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* User Preferences */}
-          <div className="bg-white rounded-lg shadow-md border-2 border-[#2164F3] p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold text-[#2164F3]">Preferences</h2>
-              {!isEditingPreferences ? (
-                <button
-                onClick={() => {
-                  setDraftPreferences(preferences);
-                  setIsEditingPreferences(true);
-                }}
-                  className="text-sm bg-[#2164F3] hover:bg-[#1a4ec7] text-white px-4 py-2 rounded transition-colors font-medium"
-                >
-                  Edit
-                </button>
-              ) : (
-                <button
-                  onClick={() => {
-                    setIsEditingPreferences(false);
-                    setEmailError("");
-                  }}
-                  className="text-sm bg-white hover:bg-gray-50 text-[#2164F3] border-2 border-[#2164F3] px-4 py-2 rounded transition-colors font-medium"
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-
-            <div className="space-y-4">
-              <div className="flex items-start gap-3">
-                <Briefcase className="w-5 h-5 text-[#2164F3] mt-1" />
-                <div className="flex-1">
-                  <label className="text-sm font-medium text-[#2164F3] block mb-1">Job Title</label>
-                  {isEditingPreferences ? (
-                    <input
-                      type="text"
-                      value={draftPreferences.jobTitle}
-                      onChange={(e) => setDraftPreferences({ ...draftPreferences, jobTitle: e.target.value })}
-                      className="w-full px-3 py-2 border-2 border-[#2164F3] rounded focus:outline-none focus:ring-2 focus:ring-[#2164F3]"
-                      placeholder="e.g., Software Engineer"
-                    />
-                  ) : (
-                    <p className="text-[#2164F3]">{draftPreferences.jobTitle}</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <Briefcase className="w-5 h-5 text-[#2164F3] mt-1" />
-                <div className="flex-1">
-                  <label className="text-sm font-medium text-[#2164F3] block mb-1">Experience Level</label>
-                  {isEditingPreferences ? (
-                    <input
-                      type="text"
-                      value={draftPreferences.experienceLevel}
-                      onChange={(e) => setDraftPreferences({ ...draftPreferences, experienceLevel: e.target.value })}
-                      className="w-full px-3 py-2 border-2 border-[#2164F3] rounded focus:outline-none focus:ring-2 focus:ring-[#2164F3]"
-                    />
-                  ) : (
-                    <p className="text-[#2164F3]">{draftPreferences.experienceLevel}</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <Briefcase className="w-5 h-5 text-[#2164F3] mt-1" />
-                <div className="flex-1">
-                  <label className="text-sm font-medium text-[#2164F3] block mb-1">Job Type</label>
-                  {isEditingPreferences ? (
-                    <select
-                      value={preferences.jobType}
-                      onChange={(e) => setPreferences({ ...draftPreferences, jobType: e.target.value })}
-                      className="w-full px-3 py-2 border-2 border-[#2164F3] rounded focus:outline-none focus:ring-2 focus:ring-[#2164F3]"
-                    >
-                      <option value="Full-time">Full-time</option>
-                      <option value="Part-time">Part-time</option>
-                      <option value="Contract">Contract</option>
-                      <option value="Internship">Internship</option>
-                    </select>
-                  ) : (
-                    <p className="text-[#2164F3]">{preferences.jobType}</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <MapPin className="w-5 h-5 text-[#2164F3] mt-1" />
-                <div className="flex-1">
-                  <label className="text-sm font-medium text-[#2164F3] block mb-1">Location</label>
-                  {isEditingPreferences ? (
-                    <input
-                      type="text"
-                      value={preferences.location}
-                      onChange={(e) => setPreferences({ ...preferences, location: e.target.value })}
-                      className="w-full px-3 py-2 border-2 border-[#2164F3] rounded focus:outline-none focus:ring-2 focus:ring-[#2164F3]"
-                    />
-                  ) : (
-                    <p className="text-[#2164F3]">{preferences.location}</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <DollarSign className="w-5 h-5 text-[#2164F3] mt-1" />
-                <div className="flex-1">
-                  <label className="text-sm font-medium text-[#2164F3] block mb-2">
-                    Salary Range: {formatSalary(preferences.salaryRange[0])} - {formatSalary(preferences.salaryRange[1])}
-                  </label>
-                  {isEditingPreferences ? (
-                    <div className="space-y-2">
-                      <div className="flex gap-2 items-center">
-                        <input
-                          type="number"
-                          min="50000"
-                          max="500000"
-                          step="5000"
-                          value={draftPreferences.salaryRange[0]}
-                          onChange={(e) => handleSalaryChange(0, parseInt(e.target.value))}
-                          className="w-24 px-2 py-1 border-2 border-[#2164F3] rounded text-sm focus:outline-none focus:ring-2 focus:ring-[#2164F3]"
-                          placeholder="Min"
-                        />
-                        <span className="text-[#2164F3]">to</span>
-                        <input
-                          type="number"
-                          min="50000"
-                          max="500000"
-                          step="5000"
-                          value={preferences.salaryRange[1]}
-                          onChange={(e) => handleSalaryChange(1, parseInt(e.target.value))}
-                          className="w-24 px-2 py-1 border-2 border-[#2164F3] rounded text-sm focus:outline-none focus:ring-2 focus:ring-[#2164F3]"
-                          placeholder="Max"
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-[#2164F3]">
-                      ${preferences.salaryRange[0].toLocaleString()} - ${preferences.salaryRange[1].toLocaleString()}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <Mail className="w-5 h-5 text-[#2164F3] mt-1" />
-                <div className="flex-1">
-                  <label className="text-sm font-medium text-[#2164F3] block mb-1">Email</label>
-                  {isEditingPreferences ? (
-                    <div>
-                      <input
-                        type="email"
-                        value={draftPreferences.email}
-                        onChange={(e) => handleEmailChange(e.target.value)}
-                        className={`w-full px-3 py-2 border-2 rounded focus:outline-none focus:ring-2 ${emailError ? 'border-red-500 focus:ring-red-500' : 'border-[#2164F3] focus:ring-[#2164F3]'
-                          }`}
-                        placeholder="you@example.com"
-                      />
-                      {emailError && <p className="text-red-500 text-xs mt-1">{emailError}</p>}
-                    </div>
-                  ) : (
-                    <p className="text-[#2164F3]">{preferences.email || "Not set"}</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <Clock className="w-5 h-5 text-[#2164F3] mt-1" />
-                <div className="flex-1">
-                  <label className="text-sm font-medium text-[#2164F3] block mb-1">Hours Between Scrapes</label>
-                  {isEditingPreferences ? (
-                    <input
-                      type="number"
-                      min="1"
-                      max="168"
-                      value={draftPreferences.hoursInterval}
-                      onChange={(e) => setDraftPreferences({ ...draftPreferences, hoursInterval: parseInt(e.target.value) })}
-                      className="w-full px-3 py-2 border-2 border-[#2164F3] rounded focus:outline-none focus:ring-2 focus:ring-[#2164F3]"
-                    />
-                  ) : (
-                    <p className="text-[#2164F3]">{draftPreferences.hoursInterval} hours</p>
-                  )}
-                </div>
-              </div>
-
-              {isEditingPreferences && (
-                <div className="flex items-center gap-3 pt-2">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={draftPreferences.sendEmail}
-                      onChange={(e) => setDraftPreferences({ ...draftPreferences, sendEmail: e.target.checked })}
-                      className="w-4 h-4 text-[#2164F3] border-2 border-[#2164F3] rounded focus:ring-[#2164F3]"
-                    />
-                    <span className="text-sm text-[#2164F3]">Send email notifications</span>
-                  </label>
-                </div>
-              )}
-
-              {isEditingPreferences && (
-                <button
-                  onClick={handleSavePreferences}
-                  className="w-full bg-[#2164F3] hover:bg-[#1a4ec7] text-white py-3 rounded transition-colors font-semibold"
-                >
-                  Save Preferences
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* System Updates */}
-          <div className="bg-white rounded-lg shadow-md border-2 border-[#2164F3] p-6">
-            <h2 className="text-xl font-semibold text-[#2164F3] mb-4">System Updates</h2>
-            <div className="h-[450] overflow-y-auto space-y-2 custom-scrollbar">
-              {updates.length === 0 ? (
-                <p className="text-[#2164F3] text-sm">No updates yet. Start a scrape to see messages.</p>
-              ) : (
-                updates.slice().reverse().map((update, i) => (
-                  <div
-                    key={i}
-                    className={`p-3 rounded border-l-4 ${update.status === 'completed' ? 'bg-green-50 border-green-500' :
-                        update.status === 'failed' ? 'bg-red-50 border-red-500' :
-                          update.status === 'running' ? 'bg-blue-50 border-blue-500' :
-                            'bg-gray-50 border-gray-500'
-                      }`}
-                  >
-                    <div className="flex justify-between items-start mb-1">
-                      <div className="flex items-center gap-2">
-                        {update.status === 'completed' && <CheckCircle className="w-4 h-4 text-green-500" />}
-                        {update.status === 'failed' && <AlertCircle className="w-4 h-4 text-red-500" />}
-                        {update.status === 'running' && <Clock className="w-4 h-4 text-blue-500 animate-spin" />}
-                        <span className="font-medium text-sm text-[#2164F3]">{update.status.toUpperCase()}</span>
-                      </div>
-                      <span className="text-xs text-[#2164F3]">{update.timestamp}</span>
-                    </div>
-                    <p className="text-sm text-[#2164F3]">Jobs found: {update.jobs_found}</p>
-                    {update.page_completed !== undefined && update.page_completed !== null && (
-                      <p className="text-xs text-[#2164F3] mt-1">Page completed: {update.page_completed}</p>
-                    )}
-                    {update.jobs_from_page !== undefined && update.jobs_from_page !== null && (
-                      <p className="text-xs text-[#2164F3] mt-1">Jobs from page: {update.jobs_from_page}</p>
-                    )}
-                    {update.source && <p className="text-xs text-[#2164F3] mt-1">Source: {update.source}</p>}
-                    {update.error_message && (
-                      <p className="text-sm text-red-600 mt-1">{update.error_message}</p>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Job Search History */}
-        <div className="bg-white rounded-lg shadow-md border-2 border-[#2164F3] p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold text-[#2164F3]">Job History</h2>
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#2164F3]" />
-                <input
-                  type="text"
-                  placeholder="Search jobs..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 pr-4 py-2 border-2 border-[#2164F3] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#2164F3] text-sm"
-                />
-              </div>
+      {/* Job Detail Modal */}
+      {selectedJob && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50" onClick={() => setSelectedJob(null)}>
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-6">
+              <h2 className="text-2xl font-bold text-gray-900">{selectedJob.title}</h2>
               <button
-                onClick={() => setFilterVisible(!filterVisible)}
-                className="p-2 border-2 border-[#2164F3] rounded-lg hover:bg-[#2164F3] hover:text-white transition-colors"
+                onClick={() => setSelectedJob(null)}
+                className="text-gray-400 hover:text-gray-600"
               >
-                <Filter className="w-4 h-4" />
+                <X className="w-6 h-6" />
               </button>
             </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredJobs.map((job) => (
-              <div
-                key={job.id}
-                className="relative p-4 border-2 border-[#2164F3] rounded-lg hover:border-[#1a4ec7] hover:shadow-lg transition-all cursor-pointer group bg-white"
-              >
-                {/* Match Score Badge */}
-                {job.matchScore && (
-                  <div className={`absolute top-3 right-3 px-2 py-1 rounded text-xs font-bold ${job.matchScore >= 85 ? 'bg-green-100 text-green-700' :
-                      job.matchScore >= 70 ? 'bg-blue-100 text-blue-700' :
-                        'bg-gray-100 text-gray-700'
-                    }`}>
-                    {job.matchScore}% Match
-                  </div>
-                )}
-
-                {/* New Badge */}
-                {job.isNew && (
-                  <div className="absolute top-3 left-3 bg-[#2164F3] text-white px-2 py-1 rounded text-xs font-bold animate-pulse">
-                    NEW
-                  </div>
-                )}
-
-                <div onClick={() => setSelectedJob(job)} className="pt-6">
-                  <h3 className="font-semibold text-[#2164F3] mb-1 pr-16">{job.title}</h3>
-                  <p className="text-sm text-[#2164F3] mb-2">{job.company}</p>
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-xs text-[#2164F3]">
-                      <MapPin className="w-3 h-3" />
-                      {job.location}
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-[#2164F3]">
-                      <DollarSign className="w-3 h-3" />
-                      {job.salary}
-                    </div>
-                    <p className="text-xs text-[#2164F3] mt-2">{job.date}</p>
-                  </div>
-                </div>
-
-                {/* Save Button */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleSaveJob(job.id);
-                  }}
-                  className="absolute bottom-3 right-3 p-2 rounded-full hover:bg-blue-50 transition-colors"
-                >
-                  <Bookmark
-                    className={`w-5 h-5 ${job.isSaved ? 'fill-[#2164F3] text-[#2164F3]' : 'text-[#2164F3]'}`}
-                  />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Job Detail Modal */}
-        {selectedJob && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50" onClick={() => setSelectedJob(null)}>
-            <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-start justify-between mb-6">
-                <h2 className="text-2xl font-bold text-[#2164F3]">{selectedJob.title}</h2>
-                <button
-                  onClick={() => setSelectedJob(null)}
-                  className="text-[#2164F3] hover:text-[#1a4ec7]"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <Briefcase className="w-5 h-5 text-[#2164F3]" />
-                  <div>
-                    <span className="font-medium text-[#2164F3]">Company: </span>
-                    <span className="text-[#2164F3]">{selectedJob.company}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <MapPin className="w-5 h-5 text-[#2164F3]" />
-                  <div>
-                    <span className="font-medium text-[#2164F3]">Location: </span>
-                    <span className="text-[#2164F3]">{selectedJob.location}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <DollarSign className="w-5 h-5 text-[#2164F3]" />
-                  <div>
-                    <span className="font-medium text-[#2164F3]">Salary: </span>
-                    <span className="text-[#2164F3]">{selectedJob.salary}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <Briefcase className="w-5 h-5 text-[#2164F3]" />
-                  <div>
-                    <span className="font-medium text-[#2164F3]">Level: </span>
-                    <span className="text-[#2164F3]">{selectedJob.experience}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3">
-                  <svg className="w-5 h-5 text-[#2164F3] mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                  </svg>
-                  <div className="flex-1">
-                    <span className="font-medium text-[#2164F3]">Link: </span>
-                    <a
-                      href={selectedJob.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[#2164F3] hover:underline break-all"
-                    >
-                      {selectedJob.link}
-                    </a>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <Clock className="w-5 h-5 text-[#2164F3]" />
-                  <div>
-                    <span className="font-medium text-[#2164F3]">Time: </span>
-                    <span className="text-[#2164F3]">{selectedJob.date}</span>
-                  </div>
-                </div>
-
-                {selectedJob.matchScore && (
-                  <div className="flex items-center gap-3 pt-3 border-t-2 border-[#2164F3]">
-                    <Target className="w-5 h-5 text-[#2164F3]" />
-                    <div>
-                      <span className="font-medium text-[#2164F3]">Match Score: </span>
-                      <span className="font-bold text-[#2164F3]">{selectedJob.matchScore}%</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-6 flex gap-3">
-                <button
-                  onClick={() => window.open(selectedJob.link, '_blank')}
-                  className="flex-1 bg-[#2164F3] hover:bg-[#1a4ec7] text-white py-3 rounded-lg font-semibold transition-colors"
-                >
-                  Apply Now
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleSaveJob(selectedJob.id);
-                  }}
-                  className={`px-6 py-3 rounded-lg font-semibold transition-colors ${selectedJob.isSaved
-                      ? 'bg-[#2164F3] text-white hover:bg-[#1a4ec7]'
-                      : 'border-2 border-[#2164F3] text-[#2164F3] hover:bg-blue-50'
-                    }`}
-                >
-                  {selectedJob.isSaved ? 'Saved' : 'Save'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {showLoginModal && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"
-          onClick={() => setShowLoginModal(false)}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl w-full max-w-md p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="text-2xl font-bold text-[#2164F3] mb-4">
-              Sign in
-            </h2>
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-[#2164F3] mb-1">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  className="w-full px-3 py-2 border-2 border-[#2164F3] rounded focus:outline-none focus:ring-2 focus:ring-[#2164F3]"
-                  placeholder="you@example.com"
-                />
+              <div className="flex items-center gap-3">
+                <Briefcase className="w-5 h-5 text-gray-400" />
+                <div>
+                  <span className="font-medium text-gray-700">Company: </span>
+                  <span className="text-gray-900">{selectedJob.company_name}</span>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-[#2164F3] mb-1">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  className="w-full px-3 py-2 border-2 border-[#2164F3] rounded focus:outline-none focus:ring-2 focus:ring-[#2164F3]"
-                  placeholder="••••••••"
-                />
+              <div className="flex items-center gap-3">
+                <MapPin className="w-5 h-5 text-gray-400" />
+                <div>
+                  <span className="font-medium text-gray-700">Location: </span>
+                  <span className="text-gray-900">{selectedJob.location}</span>
+                </div>
               </div>
 
-              {loginError && (
-                <p className="text-sm text-red-600">{loginError}</p>
+              <div className="flex items-center gap-3">
+                <Briefcase className="w-5 h-5 text-gray-400" />
+                <div>
+                  <span className="font-medium text-gray-700">Job Type: </span>
+                  <span className="text-gray-900">{selectedJob.job_type}</span>
+                </div>
+              </div>
+
+              {selectedJob.salary && (
+                <div className="flex items-center gap-3">
+                  <DollarSign className="w-5 h-5 text-gray-400" />
+                  <div>
+                    <span className="font-medium text-gray-700">Salary: </span>
+                    <span className="text-gray-900">{selectedJob.salary}</span>
+                  </div>
+                </div>
               )}
 
+              {selectedJob.description && (
+                <div className="flex items-start gap-3">
+                  <Target className="w-5 h-5 text-gray-400 mt-0.5" />
+                  <div className="flex-1">
+                    <span className="font-medium text-gray-700">Description: </span>
+                    <p className="text-gray-900 mt-1">{selectedJob.description}</p>
+                  </div>
+                </div>
+              )}
+
+              {selectedJob.benefits && (
+                <div className="flex items-start gap-3">
+                  <Bookmark className="w-5 h-5 text-gray-400 mt-0.5" />
+                  <div className="flex-1">
+                    <span className="font-medium text-gray-700">Benefits: </span>
+                    <p className="text-gray-900 mt-1">{selectedJob.benefits}</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 pt-3 border-t border-gray-100">
+                <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                  selectedJob.priority
+                    ? 'bg-blue-100 text-blue-800'
+                    : 'bg-gray-100 text-gray-600'
+                }`}>
+                  {selectedJob.priority ? 'Priority Job' : 'Regular Job'}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-2 gap-3">
               <button
-                onClick={() => {
-                  if (!loginEmail || !loginPassword) {
-                    setLoginError("Email and password are required");
-                    return;
-                  }
-
-                  if (!validateEmail(loginEmail)) {
-                    setLoginError("Invalid email format");
-                    return;
-                  }
-
-                  // UI-only success
-                  setIsLoggedIn(true);
-                  setUserEmail(loginEmail);
-
-                  setLoginEmail("");
-                  setLoginPassword("");
-                  setLoginError("");
-                  setShowLoginModal(false);
-                }}
-                className="w-full bg-[#2164F3] hover:bg-[#1a4ec7] text-white py-3 rounded-lg font-semibold transition-colors"
+                onClick={() => window.open(selectedJob.url, '_blank')}
+                className="bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold transition-colors"
               >
-                Sign in
+                Apply Now
+              </button>
+              <button
+                onClick={() => toggleJobPriority(selectedJob.id)}
+                className={`py-3 rounded-lg font-semibold transition-colors ${
+                  selectedJob.priority
+                    ? 'bg-blue-100 text-blue-800 hover:bg-blue-200'
+                    : 'border-2 border-blue-600 text-blue-600 hover:bg-blue-50'
+                }`}
+              >
+                {selectedJob.priority ? 'Remove Priority' : 'Add Priority'}
+              </button>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <button
+                onClick={() => completeJob(selectedJob.id)}
+                className="bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-semibold transition-colors"
+              >
+                Mark Complete
+              </button>
+              <button
+                onClick={() => deleteJob(selectedJob.id)}
+                className="bg-red-600 hover:bg-red-700 text-white py-3 rounded-lg font-semibold transition-colors"
+              >
+                Delete Job
               </button>
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 }

@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     resend_api_key: str
     
     # Testing
-    test_user_id : str = 'd1f7418b-f9a5-4adb-b8f9-e5128952a8a2'
+    test_user_id : str = 'a3c049c8-8110-4d88-95a1-d023be9cdebb'
     test_from_email: str = 'onboarding@resend.dev'
 
     # Scraper

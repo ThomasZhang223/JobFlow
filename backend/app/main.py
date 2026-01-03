@@ -4,7 +4,10 @@ from contextlib import asynccontextmanager
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.api.routers import health, scrape
+from app.api.routers import (health, scrape, delete_job_by_id, get_job_by_id, \
+    get_jobs, get_preferences, get_priority_jobs, get_statistics, job_complete, \
+        search_jobs, toggle_job_priority, update_preference)        
+    
 from app.api import websocket
 from app.schemas.messages import ScrapeUpdateMessage
 from app.core.redis_client import redis_client
@@ -56,3 +59,14 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(scrape.router)
 app.include_router(websocket.router)
+
+app.include_router(delete_job_by_id.router)
+app.include_router(get_job_by_id.router)
+app.include_router(get_jobs.router)
+app.include_router(get_preferences.router)
+app.include_router(get_priority_jobs.router)
+app.include_router(get_statistics.router)
+app.include_router(job_complete.router)
+app.include_router(search_jobs.router)
+app.include_router(toggle_job_priority.router)
+app.include_router(update_preference.router)

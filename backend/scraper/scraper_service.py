@@ -44,9 +44,6 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         ScrapeUpdateMessage: Final status with job count or error
     """
 
-    # Determine max_results from scrape_length preference
-    max_results = preferences.get('scrape_length')
-
     try:
         # Send initial running status
         update = ScrapeUpdateMessage(status=Status.RUNNING, jobs_found=0)
@@ -83,8 +80,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         process = subprocess.Popen([
             sys.executable, '-u', spider_script,  # -u flag for unbuffered output
             preferences_json,
-            str(max_results)
-        ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, bufsize=1)
+        ], stdout=None, stderr=None, text=True, env=env)
 
         # Listen for Redis messages from spider to get final job count
         r = redis.from_url(settings.redis_url)
@@ -95,7 +91,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         spider_completed = False
 
         try:
-            # Poll for both subprocess completion and Redis messages
+            # Poll for both subprocess completion and Redis messages for page completions
             while process.poll() is None and not spider_completed:
                 # Check for Redis messages with timeout
                 message = pubsub.get_message(timeout=1.0)
@@ -106,7 +102,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
 
                         # Check if this is the final completion message
                         if update_data.get('spider_finished'):
-                            final_job_count = update_data.get('jobs_found', 0)
+                            final_job_count = update_data.get('jobs_found')
                             spider_completed = True
                             print(f"Spider finished with {final_job_count} jobs")
                     except (json.JSONDecodeError, TypeError) as e:
@@ -131,7 +127,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
             error_msg = f"Spider subprocess failed with return code {returncode}"
             error_update = ScrapeUpdateMessage(
                 status=Status.FAILED,
-                jobs_found=0,
+                jobs_found=final_job_count,
                 error_message=error_msg
             )
             return error_update
@@ -147,7 +143,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         error_msg = "Spider timed out after 10 minutes"
         error_update = ScrapeUpdateMessage(
             status=Status.FAILED,
-            jobs_found=0,
+            jobs_found=final_job_count,
             error_message=error_msg
         )
         publish_update(error_update)
@@ -159,7 +155,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
 
         error_update = ScrapeUpdateMessage(
             status=Status.FAILED,
-            jobs_found=0,
+            jobs_found=final_job_count,
             error_message=error_msg
         )
         publish_update(error_update)

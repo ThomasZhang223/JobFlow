@@ -1,10 +1,14 @@
 import scrapy
-import redis
+import math
 import os
 import sys
 from datetime import datetime
 from urllib.parse import urlencode
 import json
+
+# Import anti-bot measures
+from indeed_scraper.user_agents import get_random_user_agent
+from indeed_scraper.proxies import get_random_proxy, is_proxy_enabled
 
 # Add paths for imports
 current_dir = os.path.dirname(__file__)
@@ -27,7 +31,7 @@ def publish_update(message):
         scrape_update_channel = os.environ.get('SCRAPE_UPDATE_CHANNEL')
 
         if not redis_url or not scrape_update_channel:
-            # No Redis config available, skip publishing
+            print(f'No Redis connection available')
             return
 
         r = redis.from_url(redis_url)
@@ -63,11 +67,29 @@ class IndeedSpider(scrapy.Spider):
         'AUTOTHROTTLE_MAX_DELAY': 5,
         'AUTOTHROTTLE_TARGET_CONCURRENCY': 8.0,  # Target 8 concurrent per domain
         'AUTOTHROTTLE_DEBUG': False,  # Set to True for debugging throttling
-        'LOG_LEVEL': 'ERROR',  # Silence all logs except errors for clean JSON output
+        'LOG_LEVEL': 'INFO',  # Reduce verbosity while keeping important logs
+
+        # Anti-bot measures
+        'ROBOTSTXT_OBEY': False,  # Ignore robots.txt for scraping
+        'COOKIES_ENABLED': False,  # Better anonymity without session tracking
+        'TELNETCONSOLE_ENABLED': False,
+        'DEFAULT_REQUEST_HEADERS': {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-CA,en-US;q=0.9,en;q=0.8',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Priority': 'u=0, i',
+            'Referer': 'https://www.google.com/',
+        }
     }
     
-    def __init__(self, preferences=None, max_results=50, *args, **kwargs):
+    def __init__(self, preferences=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # Initialize query, preference, tallying variables
+        self.scrape_session_counted = False  # Track if we've incremented total_scrapes for this session
 
         # Handle both programmatic (dict) and command line (JSON string) calls
         if preferences is None:
@@ -96,34 +118,60 @@ class IndeedSpider(scrapy.Spider):
         # Store all preferences as lists for filtering - handle null/empty values
         self.preferred_titles = [t.strip().lower() for t in title_prefs]
         self.preferred_locations = [l.strip().lower() for l in location_prefs]
-
+        
+        # Handle company_name - check for null, empty, or 'null' string
+        company_name_val = preferences.get('company_name')
+        self.preferred_company_name = None
+        if company_name_val and company_name_val != 'null' and str(company_name_val).strip():
+            # Filters out any potential empty strings after splitting (if c.strip())
+            self.preferred_company_name = [c.strip().lower() for c in str(company_name_val).split(',') if c.strip()]
+            
         # Handle job_type - check for null, empty, or 'null' string
         job_type_val = preferences.get('job_type')
         self.preferred_job_types = None
         if job_type_val and job_type_val != 'null' and str(job_type_val).strip():
+            # Filters out any potential empty strings after splitting (if j.strip())
             self.preferred_job_types = [j.strip().lower() for j in str(job_type_val).split(',') if j.strip()]
 
         # Handle salary - check for null, empty, or 'null' string
         salary_val = preferences.get('salary')
         self.preferred_salaries = None
         if salary_val and salary_val != 'null' and str(salary_val).strip():
+            # Filters out any potential empty strings after splitting (if s.strip())
             self.preferred_salaries = [s.strip().lower() for s in str(salary_val).split(',') if s.strip()]
 
         # Handle description - check for null, empty, or 'null' string
         desc_val = preferences.get('description')
         self.preferred_descriptions = None
         if desc_val and desc_val != 'null' and str(desc_val).strip():
+            # Filters out any potential empty strings after splitting (if d.strip())
             self.preferred_descriptions = [d.strip().lower() for d in str(desc_val).split(',') if d.strip()]
 
-        self.max_results = int(max_results)
+        # Handle benefits - check for null, empty, or 'null' string
+        benefits_val = preferences.get('benefits')
+        self.preferred_benefits = None
+        if benefits_val and benefits_val != 'null' and str(benefits_val).strip():
+            # Filters out any potential empty strings after splitting (if b.strip())
+            self.preferred_benefits = [b.strip().lower() for b in str(benefits_val).split(',') if b.strip()]
+
+        # Handle radius - check for null, empty, or 'null' string
+        radius_val = preferences.get('radius')
+        self.radius = None
+        if radius_val and radius_val != 'null' and str(radius_val).strip():
+            try:
+                self.radius = int(radius_val)
+            except (ValueError, TypeError):
+                self.radius = None
+
+        self.max_results = int(preferences['scrape_length'])
         self.jobs_scraped = 0
-        self.start_page = 0
         self.pages_visited = 0
-        self.max_pages = 10  # Safety limit - never visit more than 10 pages
+        self.max_pages = 15  # Safety limit - never visit more than 15 pages
 
         self.logger.info(f"=== Indeed Spider Initialized ===")
         self.logger.info(f"Primary Query: {self.query}")
         self.logger.info(f"Primary Location: {self.location}")
+        self.logger.info(f"Location Radius: {self.radius}")
         self.logger.info(f"Max Results: {self.max_results}")
         self.logger.info(f"Title Filters: {self.preferred_titles}")
         self.logger.info(f"Location Filters: {self.preferred_locations}")
@@ -134,31 +182,25 @@ class IndeedSpider(scrapy.Spider):
     def start_requests(self):
         """Generate parallel requests to multiple pages simultaneously to bypass anti-bot detection"""
         # Calculate how many pages we might need based on max_results
-        # Assume ~10-15 jobs per page, so we need roughly max_results/12 pages
-        estimated_pages_needed = min(max(1, (self.max_results + 11) // 12), self.max_pages)
+        # Assume ~10-16 jobs per page, so we need roughly max_results/13 pages
+        estimated_pages_needed = min(max(1, math.ceil(self.max_results/13)), self.max_pages)
 
         self.logger.info(f"=== PARALLEL PAGE LOADING STRATEGY ===")
         self.logger.info(f"Max results: {self.max_results}, Estimated pages needed: {estimated_pages_needed}")
 
         # Generate URLs for multiple pages simultaneously
         for page_num in range(estimated_pages_needed):
-            page_url = self.get_indeed_search_url(self.query, self.location, page_num)
+            page_url = self.get_indeed_search_url(page_num)
 
             self.logger.info(f"Queuing page {page_num + 1}: {page_url}")
 
-            # Stagger the requests slightly to avoid simultaneous hits
-            wait_time = 2000 + (page_num * 1000)  # 2s, 3s, 4s, etc.
-
-            yield scrapy.Request(
+            request = self.make_request(
                 url=page_url,
                 callback=self.parse_search_results_parallel,
                 meta={
                     'playwright': True,
                     'playwright_include_page': True,
                     'playwright_page_goto_kwargs': {'wait_until': 'domcontentloaded', 'timeout': 60000},
-                    'playwright_page_methods': [
-                        {'method': 'wait_for_timeout', 'args': [wait_time]}
-                    ],
                     'page_number': page_num + 1,
                     'is_parallel_load': True
                 },
@@ -166,9 +208,57 @@ class IndeedSpider(scrapy.Spider):
                 dont_filter=True
             )
 
+            self.logger.info(f"Request created for page {page_num + 1}, yielding...")
+            yield request
+
+    def make_request(self, url, callback, **kwargs):
+        """Create a request object with anti-bot measures (rotating user agents and proxies)"""
+        headers = {}
+
+        # Add rotating user agent
+        user_agent = get_random_user_agent()
+        headers['User-Agent'] = user_agent
+        self.logger.info(f"Using user agent: {user_agent}...")
+
+        # Create request with custom headers
+        request = scrapy.Request(
+            url=url,
+            callback=callback,
+            headers=headers,
+            **kwargs
+        )
+
+        # Add proxy if available
+        if is_proxy_enabled:
+            proxy = get_random_proxy()
+            request.meta['proxy'] = proxy
+            self.logger.info(f"Using proxy: {proxy[:20]}...")
+
+        return request
+    
+    def get_indeed_search_url(self, page, external_id=None):
+        """Build Indeed search URL"""
+        params = {
+            'q': self.query,
+            'l': self.location,
+            'start': page * 10  # Indeed shows 10 jobs per page
+        }
+
+        # Add radius parameter if specified
+        if self.radius is not None:
+            params['radius'] = self.radius
+
+        if external_id is not None:
+            params['vjk'] = external_id
+            
+        return f"https://{self.base_domain}/jobs?{urlencode(params)}"
+    
     def parse_search_results_parallel(self, response):
         """Parse search results for parallel loading strategy"""
-        page_num = response.meta.get('page_number', 1)
+        page_num = response.meta.get('page_number')
+
+        # Increment pages visited counter for every page processed
+        self.pages_visited += 1
 
         self.logger.info(f"=== PARSING PARALLEL PAGE {page_num} ===")
         self.logger.info(f"URL: {response.url}")
@@ -187,6 +277,7 @@ class IndeedSpider(scrapy.Spider):
         # Process jobs from this page
         jobs_from_this_page = 0
         for card in job_cards:
+            # Exceeded limit
             if self.jobs_scraped >= self.max_results:
                 self.logger.info(f"Reached max limit: {self.max_results}")
                 break
@@ -200,12 +291,12 @@ class IndeedSpider(scrapy.Spider):
                     if was_saved:
                         self.jobs_scraped += 1
                         jobs_from_this_page += 1
-                        self.logger.info(f"✅ Saved job {self.jobs_scraped}: {job_data.get('title')} at {job_data.get('company_name')} (from page {page_num})")
-                        yield job_data
+                        self.logger.info(f"Saved job {self.jobs_scraped}: {job_data.get('title')} at {job_data.get('company_name')} (from page {page_num})")
+                        yield job_data # not currently used, maybe for future features?
                     else:
-                        self.logger.info(f"🔄 Duplicate skipped: {job_data.get('title')} at {job_data.get('company_name')} (from page {page_num})")
+                        self.logger.info(f"Duplicate skipped: {job_data.get('title')} at {job_data.get('company_name')} (from page {page_num})")
                 except Exception as e:
-                    self.logger.error(f"❌ Failed to save job to database: {e}")
+                    self.logger.error(f"Failed to save job to database: {e}")
                     # Continue processing even if one job fails to save
 
         self.logger.info(f"Page {page_num} completed: {jobs_from_this_page} jobs matched from {len(job_cards)} total")
@@ -256,17 +347,66 @@ class IndeedSpider(scrapy.Spider):
                 card.css('div.companyLocation::text').get()
             )
             
-            # Salary
-            salary = (
-                card.css('div.metadata div.salary-snippet-container::text').get() or
-                card.css('div.salary-snippet-container::text').get()
-            )
-            
-            # Job type
-            job_type = (
-                card.css('div.metadata div.attribute_snippet::text').get() or
-                card.css('span.attribute_snippet::text').get()
-            )
+            # Extract metadata from multiple possible locations
+            salary = None
+            job_type = None
+            benefits_list = []
+
+            # Try multiple metadata selectors
+            metadata_selectors = [
+                'ul.heading6.tapItem-gutter.metadataContainer li',
+                'ul[data-testid="job-details"] li',
+                'div[data-testid="job-attribute-group"] div',
+                'div.metadata div',
+                'ul.heading6 li'
+            ]
+
+            for selector in metadata_selectors:
+                metadata_items = card.css(selector)
+                if metadata_items:
+                    break
+
+            for item in metadata_items:
+                # Try multiple ways to get text content - updated for current Indeed structure
+                metadata_text = (
+                    item.css('div[class*="mosaic-provider-jobcards-"]::text').get() or  # Current structure
+                    item.css('div::text').get() or
+                    item.css('span::text').get() or
+                    item.css('::text').get()
+                )
+
+                if metadata_text:
+                    metadata_text = metadata_text.strip()
+
+                    # Check for salary (contains $ and year/hour)
+                    if '$' in metadata_text and ('year' in metadata_text or 'hour' in metadata_text):
+                        salary = metadata_text
+                    # Check for job type - expand patterns
+                    elif any(jt in metadata_text for jt in ['Full-time', 'Part-time', 'Contract', 'Temporary', 'Internship', 'Co-op', 'Permanent', 'Casual']):
+                        job_type = metadata_text
+                    # Everything else goes to benefits
+                    else:
+                        benefits_list.append(metadata_text)
+
+            # Combine all benefits into a single string
+            benefits = ', '.join(benefits_list) if benefits_list else None
+
+            # Fallback selectors if not found in metadata
+            if not salary:
+                salary = (
+                    card.css('div.salary-snippet-container::text').get() or
+                    card.css('span.salary::text').get() or
+                    card.css('div[data-testid="salary-text"]::text').get() or
+                    card.css('div.salaryText::text').get()
+                )
+
+            if not job_type:
+                job_type = (
+                    card.css('div[data-testid="attribute_snippet_testid"]::text').get() or
+                    card.css('span.attribute_snippet::text').get() or
+                    card.css('div[data-testid="job-type"]::text').get() or
+                    card.css('span.jobtype::text').get()
+                )
             
             # Description snippet
             description = card.css('div.job-snippet::text').get()
@@ -297,14 +437,11 @@ class IndeedSpider(scrapy.Spider):
             job['title'] = title.strip()
             job['company_name'] = company.strip()
             job['location'] = location.strip() if location else ''
-            job['job_type'] = job_type.strip() if job_type else 'Full-time'
+            job['job_type'] = job_type.strip() if job_type else ''
             job['salary'] = salary.strip() if salary else None
             job['url'] = job_url
-            job['posted_date'] = None
             job['description'] = description.strip() if description else ''
-            job['search_query'] = self.query  # Scraper metadata
-            job['search_location'] = self.location  # Scraper metadata
-            job['scraped_at'] = datetime.now().isoformat()  # Scraper metadata
+            job['benefits'] = benefits
             
             self.logger.info(f"Scraped job {self.jobs_scraped + 1}: {title} at {company}")
             
@@ -317,45 +454,48 @@ class IndeedSpider(scrapy.Spider):
     def matches_preferences(self, job_data):
         """Filter jobs based on user preferences using OR logic"""
 
-        job_title = job_data.get('title', '').lower()
-        job_location = job_data.get('location', '').lower()
+        job_title = job_data.get('title').lower()
+        job_company = job_data.get('company_name').lower()
+        job_location = (job_data.get('location') or '').lower()
         job_type = (job_data.get('job_type') or '').lower()
         job_description = (job_data.get('description') or '').lower()
         job_salary = (job_data.get('salary') or '').lower()
+        job_benefits = (job_data.get('benefits') or '').lower()
 
         # Debug logging
         self.logger.info(f"=== PREFERENCE CHECK ===")
-        self.logger.info(f"Job: '{job_title}' at '{job_location}' type:'{job_type}'")
-        self.logger.info(f"Filters - titles:{self.preferred_titles} locations:{self.preferred_locations} types:{self.preferred_job_types}")
-
+        
         # Check if job matches ANY of the title preferences (case-insensitive substring)
         if self.preferred_titles:
             title_match = any(pref_title.lower().strip() in job_title.lower().strip()
                             for pref_title in self.preferred_titles if pref_title.strip())
-            self.logger.info(f"Title check: {title_match} ('{job_title}' vs {self.preferred_titles})")
             if not title_match:
-                self.logger.info(f"❌ FILTERED OUT: No title match")
+                self.logger.info(f"❌ FILTERED OUT: No title match. Prefer: {self.preferred_titles}, actual: {job_title}")
                 return False
-
+            
         # Check if job matches ANY of the location preferences (case-insensitive substring)
         if self.preferred_locations:
             location_match = any(pref_loc.lower().strip() in job_location.lower().strip()
                                for pref_loc in self.preferred_locations if pref_loc.strip())
-            self.logger.info(f"Location check: {location_match} ('{job_location}' vs {self.preferred_locations})")
             if not location_match:
-                self.logger.info(f"❌ FILTERED OUT: No location match")
+                self.logger.info(f"❌ FILTERED OUT: No location match. Prefer: {self.preferred_locations}, actual: {job_location}")
                 return False
 
+        # Check if job matches ANY of the company preferences (case-insensitive substring)
+        if self.preferred_company_name:
+            title_match = any(pref_company.lower().strip() in job_company.lower().strip()
+                            for pref_company in self.preferred_company_name if pref_company.strip())
+            if not title_match:
+                self.logger.info(f"❌ FILTERED OUT: No company match. Prefer: {self.preferred_company_name}, actual: {job_company}")
+                return False
+            
         # Check if job matches ANY of the job type preferences (case-insensitive substring)
         if self.preferred_job_types:
             job_type_match = any(pref_type.lower().strip() in job_type.lower().strip()
                                for pref_type in self.preferred_job_types if pref_type.strip())
-            self.logger.info(f"Job type check: {job_type_match} ('{job_type}' vs {self.preferred_job_types})")
             if not job_type_match:
-                self.logger.info(f"❌ FILTERED OUT: No job type match")
+                self.logger.info(f"❌ FILTERED OUT: No job type match. Prefer: {self.preferred_job_types}, actual: {job_type}")
                 return False
-        else:
-            self.logger.info(f"Job type check: SKIPPED (no preferences set)")
 
         # Check if job matches ANY of the description keywords (case-insensitive substring)
         if self.preferred_descriptions:
@@ -363,7 +503,7 @@ class IndeedSpider(scrapy.Spider):
                            keyword.lower().strip() in job_title.lower().strip()
                            for keyword in self.preferred_descriptions if keyword.strip())
             if not desc_match:
-                self.logger.debug(f"No description match: '{job_description}' vs {self.preferred_descriptions}")
+                self.logger.debug(f"❌ FILTERED OUT: No description match. Prefer: {self.preferred_descriptions}, actual: {job_description}")
                 return False
 
         # Check if job matches ANY of the salary preferences (case-insensitive substring)
@@ -371,33 +511,19 @@ class IndeedSpider(scrapy.Spider):
             salary_match = any(pref_salary.lower().strip() in job_salary.lower().strip()
                              for pref_salary in self.preferred_salaries if pref_salary.strip())
             if not salary_match:
-                self.logger.debug(f"No salary match: '{job_salary}' vs {self.preferred_salaries}")
+                self.logger.debug(f"❌ FILTERED OUT: No salary match. Prefer: {self.preferred_salaries}, actual: {job_salary}")
+                return False
+
+        # Check if job matches ANY of the benefits preferences (case-insensitive substring)
+        if self.preferred_benefits:
+            benefits_match = any(pref_benefit.lower().strip() in job_benefits.lower().strip()
+                               for pref_benefit in self.preferred_benefits if pref_benefit.strip())
+            if not benefits_match:
+                self.logger.debug(f"❌ FILTERED OUT: No benefits matchPrefer: {self.preferred_benefits}, actual: {job_benefits}")
                 return False
 
         self.logger.info(f"✅ PASSED ALL FILTERS - Job accepted!")
         return True
-
-    def get_indeed_search_url(self, query, location, page=0):
-        """Build Indeed search URL"""
-        params = {
-            'q': query,
-            'l': location,
-            'start': page * 10  # Indeed shows 10 jobs per page
-        }
-        return f"https://{self.base_domain}/jobs?{urlencode(params)}"
-    
-    def get_next_page_url(self, response=None):
-        """Build next page URL by incrementing start parameter"""
-
-        # Instead of trying to extract pagination links, build the next page URL directly
-        # Indeed uses start=0, start=10, start=20, etc. for pagination
-        next_page_start = self.pages_visited * 10
-
-        # Build next page URL with same search parameters
-        next_url = self.get_indeed_search_url(self.query, self.location, next_page_start // 10)
-
-        self.logger.info(f"Built next page URL: {next_url}")
-        return next_url
 
     def save_job_to_database(self, job_data):
         """Save job to database using environment variables (for subprocess compatibility)"""
@@ -421,9 +547,9 @@ class IndeedSpider(scrapy.Spider):
             supabase = create_client(supabase_url, supabase_key)
 
             # Check for duplicate jobs based on title, company, and location
-            title = job_data.get('title', '').strip()
-            company = job_data.get('company_name', '').strip()
-            location = job_data.get('location', '').strip()
+            title = (job_data.get('title') or '').strip()
+            company = (job_data.get('company_name') or '').strip()
+            location = (job_data.get('location') or '').strip()
 
             # Query for existing jobs with same title, company, and location for this user
             existing_jobs = supabase.table('jobs').select('id').eq('user_id', user_id).eq('title', title).eq('company_name', company).eq('location', location).execute()
@@ -439,16 +565,26 @@ class IndeedSpider(scrapy.Spider):
                 'company_name': company,
                 'location': location,
                 'job_type': job_data.get('job_type'),
-                'salary': job_data.get('salary'),
-                'url': job_data.get('url', ''),
-                'posted_date': job_data.get('posted_date'),
-                'description': job_data.get('description', ''),
-                'scraped_at': datetime.utcnow().isoformat()
+                'salary': (job_data.get('salary') or ''),
+                'url': (job_data.get('url') or ''),
+                'description': (job_data.get('description') or ''),
+                'benefits': (job_data.get('benefits') or '')
             }
 
             # Insert into database
-            result = supabase.table('jobs').insert(job_record).execute()
-            self.logger.debug(f"Database insert result: {result}")
+            jobs_result = supabase.table('jobs').insert(job_record).execute()
+            
+            # Update user stats
+            current = supabase.table('user_statistics').select('*').eq('user_id', user_id).execute()
+            if current.data:
+                stats = current.data[0]
+            stats['total_jobs'] += 1
+            stats['current_jobs'] += 1
+            stats['latest_scrape'] = datetime.now().astimezone().isoformat()
+            stats_result = supabase.table('user_statistics').update(stats).eq('user_id', user_id).execute()
+            
+            self.logger.debug(f"Database insert result: {jobs_result}")
+            self.logger.debug(f"Database update result: {stats_result}")
             return True  # Indicate successful save
 
         except Exception as e:
@@ -490,6 +626,34 @@ class IndeedSpider(scrapy.Spider):
         self.logger.info(f"Total jobs scraped: {self.jobs_scraped}")
         self.logger.info(f"Pages processed: {self.pages_visited}")
 
+        # Update total_scrapes once per scraping session
+        if not self.scrape_session_counted:
+            try:
+                from supabase import create_client
+                import os
+
+                # Get database settings from environment variables
+                supabase_url = os.environ.get('SUPABASE_URL')
+                supabase_key = os.environ.get('SUPABASE_KEY')
+                user_id = os.environ.get('SCRAPER_USER_ID')
+
+                if all([supabase_url, supabase_key, user_id]):
+                    # Create Supabase client
+                    supabase = create_client(supabase_url, supabase_key)
+
+                    # Update total_scrapes by 1 for this scraping session
+                    current = supabase.table('user_statistics').select('*').eq('user_id', user_id).execute()
+                    if current.data:
+                        stats = current.data[0]
+                        stats['total_scrapes'] += 1
+                        supabase.table('user_statistics').update(stats).eq('user_id', user_id).execute()
+                        self.logger.info(f"Incremented total_scrapes to {stats['total_scrapes']}")
+                        self.scrape_session_counted = True
+                else:
+                    self.logger.warning("Could not update total_scrapes - missing environment variables")
+            except Exception as e:
+                self.logger.error(f"Failed to update total_scrapes: {e}")
+
         # Publish final completion update with accurate job count
         try:
             completion_update = {
@@ -504,9 +668,9 @@ class IndeedSpider(scrapy.Spider):
             self.logger.error(f"Failed to publish completion update: {e}")
 
         if self.jobs_scraped > 0:
-            self.logger.info(f"✅ SUCCESS: Found {self.jobs_scraped} jobs from {self.pages_visited} page(s)")
+            self.logger.info(f"SUCCESS: Found {self.jobs_scraped} jobs from {self.pages_visited} page(s)")
         else:
-            self.logger.warning(f"⚠️ NO JOBS FOUND after {self.pages_visited} page(s)")
+            self.logger.warning(f"NO JOBS FOUND after {self.pages_visited} page(s)")
 
         if reason == 'finished' and self.jobs_scraped < self.max_results:
             self.logger.info(f"Note: Stopped before reaching max results ({self.max_results}) - this may be due to timeouts or filtering")

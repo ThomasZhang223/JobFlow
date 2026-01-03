@@ -16,9 +16,7 @@ class JobItem(scrapy.Item):
     salary = scrapy.Field()  # Maps to salardy_text from spider
     url = scrapy.Field()  # Maps to application_url from spider
     posted_date = scrapy.Field()
+    benefits = scrapy.Field()  # Additional metadata like "Paid time off", "Vision care", etc.
 
     # Scraper-specific metadata fields
     external_id = scrapy.Field()  # Indeed job ID
-    search_query = scrapy.Field()  # Original search query used
-    search_location = scrapy.Field()  # Original search location used
-    scraped_at = scrapy.Field()  # Timestamp when scraped

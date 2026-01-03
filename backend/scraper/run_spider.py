@@ -23,53 +23,54 @@ from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 from indeed_scraper.spiders.indeed_spider import IndeedSpider
 
-def run_spider_standalone(preferences_json, max_results=50):
+def run_spider_standalone(preferences_json):
     """
     Run the spider standalone and return scraped jobs
 
     Args:
         preferences_json: JSON string of user preferences
-        max_results: Maximum jobs to scrape
 
     Returns:
-        List of scraped jobs
+        None (jobs saved directly to database)
     """
 
-    # Change to scrapy project directory
-    os.chdir(scraper_dir)
+    try:
+        # Change to scrapy project directory
+        os.chdir(scraper_dir)
 
-    # Get Scrapy settings
-    settings = get_project_settings()
-    settings.set('LOG_LEVEL', 'ERROR')  # Silence logs for clean JSON output
+        # Get Scrapy settings
+        settings = get_project_settings()
 
-    # Disable feed output since we save directly to database
-    # Just need to ensure clean stdout
-    settings.set('FEEDS', {})  # No output feeds
+        # Disable feed output since we save directly to database
+        # Just need to ensure clean stdout
+        settings.set('FEEDS', {})  # No output feeds
 
-    # Parse preferences
-    preferences = json.loads(preferences_json)
+        # Parse preferences
+        preferences = json.loads(preferences_json)
 
-    # Create crawler process
-    process = CrawlerProcess(settings)
+        # Create crawler process
+        process = CrawlerProcess(settings)
 
-    # Run spider
-    process.crawl(
-        IndeedSpider,
-        preferences=preferences,
-        max_results=max_results
-    )
+        # Run spider
+        process.crawl(
+            IndeedSpider,
+            preferences=preferences
+        )
 
-    process.start()
+        process.start()
 
-    # Since we're doing immediate database saving, no need to return
+    except Exception as e:
+        print(f"Error in run_spider_standalone: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print("Usage: python run_spider.py '<preferences_json>' <max_results>")
+    if len(sys.argv) != 2:
+        print("Usage: python run_spider.py '<preferences_json>'")
         sys.exit(1)
 
     preferences_json = sys.argv[1]
-    max_results = int(sys.argv[2])
 
     # Run spider - jobs are saved directly to database, no output needed
-    run_spider_standalone(preferences_json, max_results)
+    run_spider_standalone(preferences_json)
