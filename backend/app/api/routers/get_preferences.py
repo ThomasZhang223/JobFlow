@@ -1,16 +1,13 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from app.schemas.database_tables import Preference
 from app.services.database_service import get_preferences
-from app.core.config import settings
+from app.core.auth import get_current_user_id
 
 router = APIRouter(prefix="/api", tags=['Frontend'])
 
 @router.get("/get_preferences", response_model=Preference)
-async def get_preferences_endpoint() -> Preference:
-    # Testing only
-    user_id = settings.test_user_id
-
+async def get_preferences_endpoint(user_id: str = Depends(get_current_user_id)) -> Preference:
     try:
         preferences = get_preferences(user_id)
     except Exception as e:

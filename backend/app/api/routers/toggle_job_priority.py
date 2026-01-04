@@ -1,15 +1,15 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from app.services.database_service import toggle_job_priority
-from app.core.config import settings
+from app.core.auth import get_current_user_id
 
 router = APIRouter(prefix="/api", tags=['Frontend'])
 
 @router.put("/toggle_job_priority/{job_id}")
-async def toggle_job_priority_endpoint(job_id: int) -> dict:
-    # Testing only
-    user_id = settings.test_user_id
-
+async def toggle_job_priority_endpoint(
+    job_id: int,
+    user_id: str = Depends(get_current_user_id)
+) -> dict:
     try:
         success = toggle_job_priority(user_id, job_id)
         if success:

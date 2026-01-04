@@ -20,3 +20,7 @@ playwright>=1.57.0
 
 # Utilities
 pydantic>=2.12.5
+
+# Authentication
+pyjwt>=2.8.0
+requests>=2.31.0

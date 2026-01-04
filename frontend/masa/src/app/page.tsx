@@ -3,6 +3,16 @@
 import { useState, useEffect, useRef } from "react";
 import { Play, MapPin, Briefcase, DollarSign, Search, X, Bookmark, Target, History, User, Edit, Save } from "lucide-react";
 import Image from "next/image";
+import { createClient } from "@supabase/supabase-js";
+import { useRouter } from "next/navigation";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Get API URL from environment variable
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const WS_URL = API_URL.replace('http', 'ws');
 
 interface ScrapeUpdate {
   task_id: string;
@@ -64,9 +74,14 @@ const DEFAULT_PREFERENCES: UserPreferences = {
 };
 
 export default function JobFlowScraper() {
+  const router = useRouter();
   const socketRef = useRef<WebSocket | null>(null);
   const [updates, setUpdates] = useState<ScrapeUpdate[]>([]);
   const [isScraperRunning, setIsScraperRunning] = useState(false);
+
+  // Auth state
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   // New UI state for navigation
   const [activePage, setActivePage] = useState("home");
@@ -102,10 +117,46 @@ export default function JobFlowScraper() {
     { id: "scrape", label: "Scrape Jobs", icon: Play },
   ];
 
+  // Check authentication on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session) {
+        router.push('/sign-in');
+        return;
+      }
+
+      setAuthToken(session.access_token);
+      setIsLoading(false);
+    };
+
+    checkAuth();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        router.push('/sign-in');
+      } else {
+        setAuthToken(session.access_token);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [router]);
+
+  // Helper function to get auth headers
+  const getAuthHeaders = () => ({
+    'Authorization': `Bearer ${authToken}`,
+    'Content-Type': 'application/json',
+  });
+
   // Fetch user preferences from API
   const fetchUserPreferences = async () => {
+    if (!authToken) return;
     try {
-      const response = await fetch('http://localhost:8000/api/get_preferences');
+      const response = await fetch(`${API_URL}/api/get_preferences`, {
+        headers: getAuthHeaders(),
+      });
       if (response.ok) {
         const prefs = await response.json();
         setDraftPreferences(prefs);
@@ -119,12 +170,11 @@ export default function JobFlowScraper() {
 
   // Save user preferences to API
   const saveUserPreferences = async (prefsToSave: UserPreferences) => {
+    if (!authToken) return;
     try {
-      const response = await fetch('http://localhost:8000/api/update_preferences', {
+      const response = await fetch(`${API_URL}/api/update_preferences`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify(prefsToSave),
       });
 
@@ -142,15 +192,20 @@ export default function JobFlowScraper() {
     }
   };
 
-  // Load preferences from API on mount
+  // Load preferences from API when auth is ready
   useEffect(() => {
-    fetchUserPreferences();
-  }, []);
+    if (authToken) {
+      fetchUserPreferences();
+    }
+  }, [authToken]);
 
   // Fetch user statistics
   const fetchUserStatistics = async () => {
+    if (!authToken) return;
     try {
-      const response = await fetch('http://localhost:8000/api/get_statistics');
+      const response = await fetch(`${API_URL}/api/get_statistics`, {
+        headers: getAuthHeaders(),
+      });
       if (response.ok) {
         const stats = await response.json();
         setUserStats(stats);
@@ -162,15 +217,20 @@ export default function JobFlowScraper() {
     }
   };
 
-  // Load user statistics on mount
+  // Load user statistics when auth is ready
   useEffect(() => {
-    fetchUserStatistics();
-  }, []);
+    if (authToken) {
+      fetchUserStatistics();
+    }
+  }, [authToken]);
 
   // Job API functions
   const fetchJobs = async () => {
+    if (!authToken) return;
     try {
-      const response = await fetch('http://localhost:8000/api/get_jobs');
+      const response = await fetch(`${API_URL}/api/get_jobs`, {
+        headers: getAuthHeaders(),
+      });
       if (response.ok) {
         const jobsList = await response.json();
         setJobs(jobsList || []);
@@ -183,8 +243,11 @@ export default function JobFlowScraper() {
   };
 
   const fetchSavedJobs = async () => {
+    if (!authToken) return;
     try {
-      const response = await fetch('http://localhost:8000/api/get_priority_jobs');
+      const response = await fetch(`${API_URL}/api/get_priority_jobs`, {
+        headers: getAuthHeaders(),
+      });
       if (response.ok) {
         const savedJobsList = await response.json();
         setSavedJobs(savedJobsList || []);
@@ -197,13 +260,16 @@ export default function JobFlowScraper() {
   };
 
   const searchJobs = async (query: string) => {
+    if (!authToken) return;
     if (!query.trim()) {
       fetchJobs();
       return;
     }
 
     try {
-      const response = await fetch(`http://localhost:8000/api/search_jobs?q=${encodeURIComponent(query)}`);
+      const response = await fetch(`${API_URL}/api/search_jobs?q=${encodeURIComponent(query)}`, {
+        headers: getAuthHeaders(),
+      });
       if (response.ok) {
         const searchResults = await response.json();
         setJobs(searchResults || []);
@@ -216,14 +282,16 @@ export default function JobFlowScraper() {
   };
 
   const toggleJobPriority = async (jobId: number) => {
+    if (!authToken) return;
     // Optimistically update the selected job's priority immediately
     if (selectedJob && selectedJob.id === jobId) {
       setSelectedJob({ ...selectedJob, priority: !selectedJob.priority });
     }
 
     try {
-      const response = await fetch(`http://localhost:8000/api/toggle_job_priority/${jobId}`, {
+      const response = await fetch(`${API_URL}/api/toggle_job_priority/${jobId}`, {
         method: 'PUT',
+        headers: getAuthHeaders(),
       });
       if (response.ok) {
         // Refresh both job lists
@@ -247,9 +315,11 @@ export default function JobFlowScraper() {
   };
 
   const deleteJob = async (jobId: number) => {
+    if (!authToken) return;
     try {
-      const response = await fetch(`http://localhost:8000/api/delete_job_by_id/${jobId}`, {
+      const response = await fetch(`${API_URL}/api/delete_job_by_id/${jobId}`, {
         method: 'DELETE',
+        headers: getAuthHeaders(),
       });
       if (response.ok) {
         // Refresh both job lists
@@ -269,8 +339,11 @@ export default function JobFlowScraper() {
   };
 
   const completeJob = async (jobId: number) => {
+    if (!authToken) return;
     try {
-      const response = await fetch(`http://localhost:8000/api/job_complete/${jobId}`);
+      const response = await fetch(`${API_URL}/api/job_complete/${jobId}`, {
+        headers: getAuthHeaders(),
+      });
       if (response.ok) {
         // Refresh both job lists
         fetchJobs();
@@ -288,14 +361,18 @@ export default function JobFlowScraper() {
     }
   };
 
-  // Load jobs on mount
+  // Load jobs when auth is ready
   useEffect(() => {
-    fetchJobs();
-    fetchSavedJobs();
-  }, []);
+    if (authToken) {
+      fetchJobs();
+      fetchSavedJobs();
+    }
+  }, [authToken]);
 
   useEffect(() => {
-    const socket = new WebSocket("ws://localhost:8000/ws/scrape");
+    if (!authToken) return;
+
+    const socket = new WebSocket(`${WS_URL}/ws/scrape?token=${authToken}`);
     socketRef.current = socket;
 
     socket.onopen = () => {
@@ -327,7 +404,7 @@ export default function JobFlowScraper() {
     socket.onerror = (error) => console.error("WebSocket error:", error);
 
     return () => socket.close();
-  }, []);
+  }, [authToken]);
 
   // Save preferences
   const handleSavePreferences = () => {
@@ -341,16 +418,14 @@ export default function JobFlowScraper() {
   };
 
   const handleStartScrape = async () => {
-    if (isScraperRunning) return;
+    if (!authToken || isScraperRunning) return;
 
     setIsScraperRunning(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/scrape', {
+      const response = await fetch(`${API_URL}/api/scrape`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -421,6 +496,17 @@ export default function JobFlowScraper() {
     { label: "Total Scrapes", value: userStats.total_scrapes.toString() },
     { label: "Last Scrape", value: userStats.latest_scrape ? new Date(userStats.latest_scrape).toLocaleDateString() : 'Never' },
   ];
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">

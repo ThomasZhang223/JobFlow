@@ -1,16 +1,13 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from app.schemas.database_tables import Statistics
 from app.services.database_service import get_user_statistics
-from app.core.config import settings
+from app.core.auth import get_current_user_id
 
 router = APIRouter(prefix="/api", tags=['Frontend'])
 
 @router.get("/get_statistics", response_model=Statistics)
-async def get_statistics() -> Statistics:
-    # Testing only
-    user_id = settings.test_user_id
-
+async def get_statistics(user_id: str = Depends(get_current_user_id)) -> Statistics:
     try:
         statistics = get_user_statistics(user_id)
     except Exception as e:
