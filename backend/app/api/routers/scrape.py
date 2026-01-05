@@ -15,6 +15,6 @@ async def scrape(user_id: str = Depends(get_current_user_id)) -> ScrapeUpdateMes
 
     run_scrape.delay(user_id, preferences.model_dump())
 
-    update = ScrapeUpdateMessage(status=Status.PENDING, jobs_found=0)
+    update = ScrapeUpdateMessage(user_id=user_id, status=Status.PENDING, jobs_found=0)
 
     return update

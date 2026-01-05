@@ -46,13 +46,14 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
 
     try:
         # Send initial running status
-        update = ScrapeUpdateMessage(status=Status.RUNNING, jobs_found=0)
+        update = ScrapeUpdateMessage(user_id=user_id, status=Status.RUNNING, jobs_found=0)
         publish_update(update)
 
         # Validate required preferences
         if not preferences.get('title') or not preferences.get('location'):
             error_msg = "Missing required preferences: title and location must be provided"
             error_update = ScrapeUpdateMessage(
+                user_id=user_id,
                 status=Status.FAILED,
                 jobs_found=0,
                 error_message=error_msg
@@ -100,11 +101,17 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
                         update_data = json.loads(message['data'])
                         print(f"REDIS UPDATE: {update_data}")
 
-                        # Check if this is the final completion message
+                        # Check if this is the final completion message (completed or failed)
                         if update_data.get('spider_finished'):
                             final_job_count = update_data.get('jobs_found')
                             spider_completed = True
-                            print(f"Spider finished with {final_job_count} jobs")
+                            status = update_data.get('status')
+                            print(f"Spider finished with status '{status}' and {final_job_count} jobs")
+                            
+                            # If spider reports failure, exit early
+                            if status == 'failed':
+                                error_msg = update_data.get('error_message', 'Spider failed')
+                                print(f"Spider failure detected: {error_msg}")
                     except (json.JSONDecodeError, TypeError) as e:
                         print(f"Failed to parse Redis message: {e}")
 
@@ -126,6 +133,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         if returncode != 0:
             error_msg = f"Spider subprocess failed with return code {returncode}"
             error_update = ScrapeUpdateMessage(
+                user_id=user_id,
                 status=Status.FAILED,
                 jobs_found=final_job_count,
                 error_message=error_msg
@@ -134,6 +142,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
 
         # Return final job count from Redis message
         completion_update = ScrapeUpdateMessage(
+            user_id=user_id,
             status=Status.COMPLETED,
             jobs_found=final_job_count
         )
@@ -142,6 +151,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
     except subprocess.TimeoutExpired:
         error_msg = "Spider timed out after 10 minutes"
         error_update = ScrapeUpdateMessage(
+            user_id=user_id,
             status=Status.FAILED,
             jobs_found=final_job_count,
             error_message=error_msg
@@ -154,6 +164,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         print(f"Error: {error_msg}")
 
         error_update = ScrapeUpdateMessage(
+            user_id=user_id,
             status=Status.FAILED,
             jobs_found=final_job_count,
             error_message=error_msg

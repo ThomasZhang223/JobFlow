@@ -23,9 +23,8 @@ class WebSocketManager:
         """
         # If user already connected, close old connection
         if user_id in self.connections:
-            old_ws = self.connections[user_id]
             try:
-                await old_ws.close(code=1000, reason="New connection established")
+                self.disconnect(user_id)
             except:
                 pass  # Old connection already closed
             print(f"User {user_id} reconnected. Closed old connection.")

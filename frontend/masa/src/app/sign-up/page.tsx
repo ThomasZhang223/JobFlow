@@ -53,7 +53,7 @@ export default function SignUpPage() {
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/sign-in`,
           data: {
             display_name: displayName.trim(),  // Save to user metadata
           },

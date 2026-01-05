@@ -1,12 +1,12 @@
-import resend
+from fastapi_mail import FastMail, MessageSchema,ConnectionConfig
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from jinja2 import Template
 
 from app.core.config import settings
 from app.schemas.messages import ScrapeUpdateMessage
 from app.schemas.database_tables import Preference
 from app.services.database_service import get_user_email
-
-resend.api_key = settings.resend_api_key
 
 EMAIL_SUCCESS_TEMPLATE = """
 <!DOCTYPE html>
@@ -168,7 +168,17 @@ EMAIL_FAILURE_TEMPLATE = """
 </html>
 """
 
-def send_scrape_complete_email(user_id: str, jobs_found: int, preferences: Preference):
+conf = ConnectionConfig(
+   MAIL_USERNAME="jobflow.vercel.app@gmail.com",
+   MAIL_PASSWORD="qkxp fauf zjcj kuif",
+   MAIL_FROM="jobflow.vercel.app@gmail.com",
+   MAIL_PORT=587,
+   MAIL_SERVER="smtp.gmail.com",
+   MAIL_STARTTLS=True,
+   MAIL_SSL_TLS=False,
+)
+
+async def send_scrape_complete_email(user_id: str, jobs_found: int, preferences: Preference):
     template = Template(EMAIL_SUCCESS_TEMPLATE)
     html_content = template.render(
         jobs_found=jobs_found,
@@ -178,19 +188,21 @@ def send_scrape_complete_email(user_id: str, jobs_found: int, preferences: Prefe
       
     try:
         to_email = get_user_email(user_id)
-        params: resend.Emails.SendParams = {
-            'from': f'JobFlow <{settings.test_from_email}>',
-            'to': [to_email],
-            'subject': 'testing backend',
-            'html': html_content
-        }
-        
-        resend.Emails.send(params)
+
+        message = MessageSchema(
+          subject="Your scrape is complete!",
+          recipients=[to_email],
+          body=html_content,
+          subtype="html"
+        )
+
+        fm = FastMail(conf)
+        await fm.send_message(message)
     
     except Exception as e:
         print(f'Email failed: {e}')
         
-def send_scrape_failed_email(user_id: str, update: ScrapeUpdateMessage, preferences: dict):
+async def send_scrape_failed_email(user_id: str, update: ScrapeUpdateMessage, preferences: dict):
     template = Template(EMAIL_FAILURE_TEMPLATE)
     html_content = template.render(
         update=update,
@@ -200,14 +212,16 @@ def send_scrape_failed_email(user_id: str, update: ScrapeUpdateMessage, preferen
     
     try:
         to_email = get_user_email(user_id)
-        params: resend.Emails.SendParams = {
-            'from': f'JobFlow <{settings.test_from_email}>',
-            'to': [to_email],
-            'subject': 'Job Scraping Failed',
-            'html': html_content
-        }
 
-        resend.Emails.send(params)
+        message = MessageSchema(
+          subject="Your scrape has failed",
+          recipients=[to_email],
+          body=html_content,
+          subtype="html"
+        )
+
+        fm = FastMail(conf)
+        await fm.send_message(message)
 
     except Exception as e:
         print(f'Email failed: {e}')

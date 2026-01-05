@@ -8,7 +8,6 @@ import json
 
 # Import anti-bot measures
 from indeed_scraper.user_agents import get_random_user_agent
-from indeed_scraper.proxies import get_random_proxy, is_proxy_enabled
 
 # Add paths for imports
 current_dir = os.path.dirname(__file__)
@@ -57,21 +56,24 @@ class IndeedSpider(scrapy.Spider):
     allowed_domains = [base_domain]
     
     custom_settings = {
-        'DOWNLOAD_DELAY': 0.5,  # Much faster with high concurrency
-        'CONCURRENT_REQUESTS': 32,  # High total concurrency for scalability
-        'CONCURRENT_REQUESTS_PER_DOMAIN': 16,  # Max 16 to Indeed simultaneously
+        # HUMAN-LIKE APPROACH: Sequential requests with realistic delays
+        'DOWNLOAD_DELAY': 6,  # 6 seconds between requests (human-like)
+        'CONCURRENT_REQUESTS': 1,  # Only 1 request at a time
+        'CONCURRENT_REQUESTS_PER_DOMAIN': 1,  # Only 1 to Indeed at a time
         'RANDOMIZE_DOWNLOAD_DELAY': True,
         'RETRY_TIMES': 3,
-        'AUTOTHROTTLE_ENABLED': True,  # Auto-adjust based on server response
-        'AUTOTHROTTLE_START_DELAY': 0.5,
-        'AUTOTHROTTLE_MAX_DELAY': 5,
-        'AUTOTHROTTLE_TARGET_CONCURRENCY': 8.0,  # Target 8 concurrent per domain
-        'AUTOTHROTTLE_DEBUG': False,  # Set to True for debugging throttling
-        'LOG_LEVEL': 'INFO',  # Reduce verbosity while keeping important logs
+
+        # AUTOTHROTTLE: Let Scrapy adjust speed based on server response
+        'AUTOTHROTTLE_ENABLED': True,
+        'AUTOTHROTTLE_START_DELAY': 5,  # Start slow
+        'AUTOTHROTTLE_MAX_DELAY': 15,  # Max delay if server struggling
+        'AUTOTHROTTLE_TARGET_CONCURRENCY': 1.0,  # Target 1 concurrent (sequential)
+        'AUTOTHROTTLE_DEBUG': False,
+        'LOG_LEVEL': 'INFO',
 
         # Anti-bot measures
-        'ROBOTSTXT_OBEY': False,  # Ignore robots.txt for scraping
-        'COOKIES_ENABLED': False,  # Better anonymity without session tracking
+        'ROBOTSTXT_OBEY': False,
+        'COOKIES_ENABLED': True,  # Required for Cloudflare challenges
         'TELNETCONSOLE_ENABLED': False,
         'DEFAULT_REQUEST_HEADERS': {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -80,13 +82,21 @@ class IndeedSpider(scrapy.Spider):
             'Sec-Fetch-Dest': 'document',
             'Sec-Fetch-Mode': 'navigate',
             'Sec-Fetch-Site': 'none',
+            'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"macOS"',
             'Priority': 'u=0, i',
             'Referer': 'https://www.google.com/',
         }
     }
     
-    def __init__(self, preferences=None, *args, **kwargs):
+    def __init__(self, user_id=None, preferences=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # Store user_id for Redis publishing
+        if not user_id:
+            raise ValueError("user_id parameter is required")
+        self.user_id = user_id
 
         # Initialize query, preference, tallying variables
         self.scrape_session_counted = False  # Track if we've incremented total_scrapes for this session
@@ -194,48 +204,14 @@ class IndeedSpider(scrapy.Spider):
 
             self.logger.info(f"Queuing page {page_num + 1}: {page_url}")
 
-            request = self.make_request(
+            yield scrapy.Request(
                 url=page_url,
                 callback=self.parse_search_results_parallel,
-                meta={
-                    'playwright': True,
-                    'playwright_include_page': True,
-                    'playwright_page_goto_kwargs': {'wait_until': 'domcontentloaded', 'timeout': 60000},
-                    'page_number': page_num + 1,
-                    'is_parallel_load': True
-                },
+                meta={'page_number': page_num + 1},
                 errback=self.handle_error,
                 dont_filter=True
             )
 
-            self.logger.info(f"Request created for page {page_num + 1}, yielding...")
-            yield request
-
-    def make_request(self, url, callback, **kwargs):
-        """Create a request object with anti-bot measures (rotating user agents and proxies)"""
-        headers = {}
-
-        # Add rotating user agent
-        user_agent = get_random_user_agent()
-        headers['User-Agent'] = user_agent
-        self.logger.info(f"Using user agent: {user_agent}...")
-
-        # Create request with custom headers
-        request = scrapy.Request(
-            url=url,
-            callback=callback,
-            headers=headers,
-            **kwargs
-        )
-
-        # Add proxy if available
-        if is_proxy_enabled:
-            proxy = get_random_proxy()
-            request.meta['proxy'] = proxy
-            self.logger.info(f"Using proxy: {proxy[:20]}...")
-
-        return request
-    
     def get_indeed_search_url(self, page, external_id=None):
         """Build Indeed search URL"""
         params = {
@@ -256,14 +232,26 @@ class IndeedSpider(scrapy.Spider):
     def parse_search_results_parallel(self, response):
         """Parse search results for parallel loading strategy"""
         page_num = response.meta.get('page_number')
-
-        # Increment pages visited counter for every page processed
         self.pages_visited += 1
 
-        self.logger.info(f"=== PARSING PARALLEL PAGE {page_num} ===")
-        self.logger.info(f"URL: {response.url}")
-        self.logger.info(f"Response status: {response.status}")
-        self.logger.info(f"Page title: {response.css('title::text').get()}")
+        self.logger.info(f"Parsing page {page_num}: {response.url} (status: {response.status})")
+
+        # Check for HTTP errors (403 Forbidden, etc.)
+        if response.status >= 400:
+            self.logger.error(f"HTTP {response.status} on page {page_num} - Access denied")
+            try:
+                failure_update = {
+                    'user_id': self.user_id,
+                    'status': 'failed',
+                    'jobs_found': self.jobs_scraped,
+                    'error_message': f'HTTP {response.status} - Access denied by Indeed',
+                    'spider_finished': True
+                }
+                publish_update(failure_update)
+                self.logger.info(f"Published HTTP error update")
+            except Exception as e:
+                self.logger.error(f"Failed to publish failure update: {e}")
+            return  # Stop processing this page
 
         # Find job cards using multiple possible selectors
         job_cards = (
@@ -275,14 +263,13 @@ class IndeedSpider(scrapy.Spider):
         self.logger.info(f"Found {len(job_cards)} job cards on page {page_num}")
 
         # Process jobs from this page
-        jobs_from_this_page = 0
         for card in job_cards:
             # Exceeded limit
             if self.jobs_scraped >= self.max_results:
                 self.logger.info(f"Reached max limit: {self.max_results}")
                 break
 
-            job_data = self.parse_job_card(card, response)
+            job_data = self.parse_job_card(card)
 
             if job_data and self.matches_preferences(job_data):
                 # Save job to database immediately with duplicate checking
@@ -290,7 +277,6 @@ class IndeedSpider(scrapy.Spider):
                     was_saved = self.save_job_to_database(job_data)
                     if was_saved:
                         self.jobs_scraped += 1
-                        jobs_from_this_page += 1
                         self.logger.info(f"Saved job {self.jobs_scraped}: {job_data.get('title')} at {job_data.get('company_name')} (from page {page_num})")
                         yield job_data # not currently used, maybe for future features?
                     else:
@@ -299,25 +285,22 @@ class IndeedSpider(scrapy.Spider):
                     self.logger.error(f"Failed to save job to database: {e}")
                     # Continue processing even if one job fails to save
 
-        self.logger.info(f"Page {page_num} completed: {jobs_from_this_page} jobs matched from {len(job_cards)} total")
-
-        # Publish page completion update with current job count
+        # Publish page completion update
         try:
             page_update = {
+                'user_id': self.user_id,
                 'status': 'running',
-                'jobs_found': self.jobs_scraped,
-                'error_message': None,
+                'jobs_found': self.jobs_scraped, 
                 'page_completed': page_num,
-                'jobs_from_page': jobs_from_this_page
             }
             publish_update(page_update)
-            self.logger.info(f"Published page {page_num} update: {self.jobs_scraped} total jobs so far")
+            self.logger.info(f"Published page {page_num} update: {self.jobs_scraped} total jobs saved so far")
         except Exception as e:
             self.logger.error(f"Failed to publish page update: {e}")
 
-    def parse_job_card(self, card, response):
+    def parse_job_card(self, card):
         """Extract job data from a job card"""
-        
+
         try:
             # Job ID - try multiple locations
             job_id = (
@@ -408,9 +391,6 @@ class IndeedSpider(scrapy.Spider):
                     card.css('span.jobtype::text').get()
                 )
             
-            # Description snippet
-            description = card.css('div.job-snippet::text').get()
-            
             # Build job URL
             if job_id:
                 job_url = f"https://{self.base_domain}/viewjob?jk={job_id}"
@@ -424,8 +404,8 @@ class IndeedSpider(scrapy.Spider):
                     else:
                         job_url = f"https://{self.base_domain}/{job_link}"
                 else:
-                    job_url = response.url
-            
+                    job_url = ''
+                
             # Validate required fields
             if not job_id or not title or not company:
                 self.logger.debug(f"Skipping incomplete job: id={job_id}, title={title}, company={company}")
@@ -440,16 +420,93 @@ class IndeedSpider(scrapy.Spider):
             job['job_type'] = job_type.strip() if job_type else ''
             job['salary'] = salary.strip() if salary else None
             job['url'] = job_url
-            job['description'] = description.strip() if description else ''
             job['benefits'] = benefits
+            job['description'] = ''  # Description fetching disabled to reduce requests by 50%
             
             self.logger.info(f"Scraped job {self.jobs_scraped + 1}: {title} at {company}")
-            
             return job
-            
+
         except Exception as e:
             self.logger.error(f"Error parsing job card: {e}")
-            return None
+
+    """
+    DISABLED DESCRIPTION FOR NOW TO AVOID IP BAN
+    
+    def parse_description(self, response):         
+        job = response.meta['job_data']
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+        try:                                                                                                                                                                                                 
+            selectors = [                                                                                                                                                                                    
+            'div[id="jobDescriptionText"]',                                                                                                                                                              
+            'div[class*="jobsearch-JobComponent-description"]',                                                                                                                                          
+            'div.jobsearch-jobDescriptionText',                                                                                                                                                          
+            ]                                                                                                                                                                                                
+                                                                                                                                                                                                            
+            job_div = None                                                                                                                                                                                   
+            for selector in selectors:                                                                                                                                                                       
+                job_div = response.css(selector)                                                                                                                                                             
+                if job_div:                                                                                                                                                                                  
+                    break                                                                                                                                                                                    
+                                                                                                                                                                                                             
+            if not job_div:                                                                                                                                                                                  
+                self.logger.warning(f"Job description container not found for {job.get('title')}")                                                                                                           
+                job['description'] = ''                                                                                                                                                                      
+            else:                                                                                                                                                                                            
+                # Block-level elements that should have newlines after them                                                                                                                                  
+                block_elements = ['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol', 'br']                                                                                                    
+                                                                                                                                                                                                             
+                formatted_text = []                                                                                                                                                                          
+                                                                                                                                                                                                            
+                # Get all elements in order                                                                                                                                                                  
+                for element in job_div.css('*'):                                                                                                                                                             
+                    element_tag = element.root.tag                                                                                                                                                           
+                                                                                                                                                                                                             
+                   # Extract text from this element (not descendants)                                                                                                                                       
+                    text = ''.join(element.xpath('./text()').getall()).strip()                                                                                                                               
+                                                                                                                                                                                                             
+                    if text and text not in ['...', '…']:                                                                                                                                                    
+                        # Add extra spacing for headers                                                                                                                                                      
+                        if element_tag in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:                                                                                                                              
+                            formatted_text.append(f'\n{text}\n')                                                                                                                                             
+                        # Regular block elements                                                                                                                                                             
+                        elif element_tag in block_elements:                                                                                                                                                  
+                            formatted_text.append(text)                                                                                                                                                      
+                            # Add newline after block elements (unless it's a br)                                                                                                                            
+                            if element_tag != 'br':                                                                                                                                                          
+                                 formatted_text.append('\n')                                                                                                                                                  
+                        else:                                                                                                                                                                                
+                            # Inline elements - just add the text with space                                                                                                                                 
+                            formatted_text.append(text + ' ')                                                                                                                                                
+                                                                                                                                                                                                             
+                full_text = ''.join(formatted_text)                                                                                                                                                          
+                                                                                                                                                                                                             
+                # Clean up excessive newlines (max 2 consecutive)                                                                                                                                            
+                import re                                                                                                                                                                                    
+                full_text = re.sub(r'\n{3,}', '\n\n', full_text)                                                                                                                                             
+                full_text = re.sub(r' +', ' ', full_text)  # Multiple spaces to single                                                                                                                       
+                full_text = full_text.strip()                                                                                                                                                                
+                                                                                                                                                                                                             
+                job['description'] = full_text                                                                                                                                                               
+                self.logger.debug(f'Fetched description for: {job.get("title")} ({len(full_text)} chars)')                                                                                                   
+                                                                                                                                                                                                             
+            # Now check if job matches preferences (including description)                                                                                                                                   
+            if self.matches_preferences(job):                                                                                                                                                                
+                # Save job to database with duplicate checking                                                                                                                                               
+                try:                                                                                                                                                                                         
+                    was_saved = self.save_job_to_database(job)                                                                                                                                               
+                    if was_saved:                                                                                                                                                                            
+                        self.jobs_scraped += 1                                                                                                                                                               
+                        self.logger.info(f"✓ Saved job {self.jobs_scraped}: {job.get('title')} at {job.get('company_name')}")                                                                                
+                    else:                                                                                                                                                                                    
+                        self.logger.info(f"Duplicate skipped: {job.get('title')} at {job.get('company_name')}")                                                                                              
+                except Exception as e:                                                                                                                                                                       
+                    self.logger.error(f"Failed to save job to database: {e}")                                                                                                                                
+            else:                                                                                                                                                                                            
+                self.logger.info(f"❌ Filtered out: {job.get('title')} (didn't match preferences)")                                                                                                           
+                                                                                                                                                                                                             
+        except Exception as e:                                                                                                                                                                               
+            self.logger.error(f"Error parsing description: {e}")                                                                                                                                             
+    """                                                       
 
     def matches_preferences(self, job_data):
         """Filter jobs based on user preferences using OR logic"""
@@ -497,7 +554,7 @@ class IndeedSpider(scrapy.Spider):
                 self.logger.info(f"❌ FILTERED OUT: No job type match. Prefer: {self.preferred_job_types}, actual: {job_type}")
                 return False
 
-        # Check if job matches ANY of the description keywords (case-insensitive substring)
+        # Check if job matches ANY of the description keywords (case-insensitive substring) --- checks both title and description
         if self.preferred_descriptions:
             desc_match = any(keyword.lower().strip() in job_description.lower().strip() or
                            keyword.lower().strip() in job_title.lower().strip()
@@ -597,7 +654,7 @@ class IndeedSpider(scrapy.Spider):
         self.logger.error(f"URL: {failure.request.url}")
         self.logger.error(f"Error type: {type(failure.value)}")
         self.logger.error(f"Error details: {failure.value}")
-
+        
         # Check if this is a timeout error
         is_timeout = (
             'TimeoutError' in str(type(failure.value)) or
@@ -657,6 +714,7 @@ class IndeedSpider(scrapy.Spider):
         # Publish final completion update with accurate job count
         try:
             completion_update = {
+                'user_id': self.user_id,
                 'status': 'completed',
                 'jobs_found': self.jobs_scraped,
                 'error_message': None,

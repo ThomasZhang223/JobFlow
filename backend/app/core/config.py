@@ -17,13 +17,6 @@ class Settings(BaseSettings):
     # Database
     supabase_url: str
     supabase_key: str
-    
-    # Email
-    resend_api_key: str
-    
-    # Testing
-    test_user_id : str = 'a3c049c8-8110-4d88-95a1-d023be9cdebb'
-    test_from_email: str = 'onboarding@resend.dev'
 
     # Scraper
     scraper_timeout_seconds: int = 300  # 5 minutes

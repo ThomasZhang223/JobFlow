@@ -15,13 +15,19 @@ from app.core.websocket_manager import websocket_manager
 
 async def handle_scrape_update(message: dict):
     # Validate message recieved from Celery with schema, then forward to websocket
-    try: 
+    try:
         update = ScrapeUpdateMessage.model_validate(message)
     except ValidationError as e:
         print(f'Invalid message: {e}')
         return
-    
-    await websocket_manager.broadcast(message=update.model_dump(mode='json'))
+
+    # Extract user_id from message
+    user_id = message.get('user_id')
+    if not user_id:
+        print(f'No user_id in scrape update message')
+        return
+
+    await websocket_manager.send_to_user(user_id=user_id, message=update.model_dump(mode='json'))
     
         
 @asynccontextmanager

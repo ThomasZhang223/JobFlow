@@ -82,12 +82,6 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Install Playwright browsers (required for scraping)
-playwright install chromium
-
-# Or install all browsers
-playwright install
 ```
 
 ### Environment Variables

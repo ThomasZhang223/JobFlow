@@ -530,24 +530,94 @@ def run_scrape(self, user_id: str, preferences: dict):
 
 ---
 
-### Step 5: Send WebSocket Updates
+### Step 5: Send WebSocket Updates via Redis Pub/Sub
 
-**File:** `worker/celery_app.py`
+**File:** `backend/scraper/indeed_scraper/spiders/indeed_spider.py`
 
 ```python
+def publish_update(message):
+    """Publish scrape update to Redis for real-time frontend updates"""
+    try:
+        import redis
+        import json
+
+        # Read Redis settings from environment variables
+        redis_url = os.environ.get('REDIS_URL')
+        scrape_update_channel = os.environ.get('SCRAPE_UPDATE_CHANNEL')
+
+        r = redis.from_url(redis_url)
+        message_json = json.dumps(message)
+        r.publish(scrape_update_channel, message_json)
+        r.close()
+
+    except Exception as e:
+        print(f"Redis publishing failed: {e}")
+        pass
+
+# Spider publishes updates with user_id
+page_update = {
+    'user_id': self.user_id,  # CRITICAL: Must include user_id
+    'status': 'running',
+    'jobs_found': self.jobs_scraped,
+    'page_completed': page_num,
+}
+publish_update(page_update)
+```
+
+**File:** `backend/app/main.py`
+
+```python
+from app.core.redis_client import redis_client
 from app.core.websocket_manager import websocket_manager
+from app.schemas.messages import ScrapeUpdateMessage
 
-def send_update(user_id: str, message: dict):
+async def handle_scrape_update(message: dict):
     """
-    Send real-time update to user's WebSocket connection
+    Handle scrape updates from Redis and forward to WebSocket
+    Called when spider publishes to Redis channel
     """
-    import asyncio
+    try:
+        # Validate message with Pydantic schema
+        update = ScrapeUpdateMessage.model_validate(message)
+    except ValidationError as e:
+        print(f'Invalid message: {e}')
+        return
 
-    async def async_send():
-        await websocket_manager.send_to_user(user_id, message)
+    # Extract user_id from message (REQUIRED field)
+    user_id = message.get('user_id')
+    if not user_id:
+        print(f'No user_id in scrape update message')
+        return
 
-    # Run async function in sync context
-    asyncio.run(async_send())
+    # Forward to specific user's WebSocket connection
+    await websocket_manager.send_to_user(user_id=user_id, message=update.model_dump(mode='json'))
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # STARTUP - Subscribe to Redis channel
+    await redis_client.connect()
+    await redis_client.subscribe(settings.scrape_update_channel, handle_scrape_update)
+
+    yield
+
+    # SHUTDOWN
+    await redis_client.disconnect()
+```
+
+**File:** `backend/app/schemas/messages.py`
+
+```python
+class ScrapeUpdateMessage(BaseModel):
+    """
+    Message published to Redis when scrape task status changes
+    """
+    user_id: str  # REQUIRED - identifies which user to send update to
+    status: Status
+    jobs_found: int = 0
+    error_message: Optional[str] = None
+    spider_finished: Optional[bool] = None
+    page_completed: Optional[int] = None
+    jobs_from_page: Optional[int] = None
 ```
 
 **File:** `backend/app/core/websocket_manager.py`
@@ -561,8 +631,11 @@ class WebSocketManager:
     async def connect(self, websocket: WebSocket, user_id: str):
         """Accept WebSocket connection for a user"""
         if user_id in self.connections:
-            # Close old connection if user reconnects
-            await self.connections[user_id].close()
+            try:
+                self.disconnect(user_id)
+            except:
+                pass
+            print(f"User {user_id} reconnected. Closed old connection.")
 
         await websocket.accept()
         self.connections[user_id] = websocket
@@ -586,10 +659,20 @@ websocket_manager = WebSocketManager()
 ```
 
 **What happens:**
-1. **Find User's Connection:** Look up WebSocket in dictionary by `user_id`
-2. **Send JSON Message:** Push update through WebSocket
-3. **Handle Errors:** If connection dropped, clean up dictionary
-4. **Singleton Pattern:** One manager instance shared across entire app
+1. **Spider Publishes to Redis:** Spider calls `publish_update()` with `user_id` included
+2. **FastAPI Subscribes:** Main app listens to Redis pub/sub channel via `handle_scrape_update()`
+3. **Validate Message:** Parse with Pydantic schema to ensure correct format
+4. **Extract user_id:** Get target user from message (REQUIRED field)
+5. **Find Connection:** Look up WebSocket in dictionary by `user_id`
+6. **Send JSON Message:** Push update through WebSocket to that specific user
+7. **Handle Errors:** If connection dropped, clean up dictionary
+8. **Singleton Pattern:** One manager instance shared across entire app
+
+**Why Redis Pub/Sub?**
+- Spider runs in separate subprocess (can't directly access WebSocket manager)
+- Redis acts as message bus between Scrapy spider and FastAPI server
+- Allows real-time updates without blocking scraper
+- Decouples scraper from web server
 
 ---
 

@@ -51,15 +51,26 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
         # Get JWKS (cached)
         jwks = get_jwks()
 
-        # Decode token header to get key ID
+        # Decode token header to get key ID and algorithm
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header.get('kid')
+        alg = unverified_header.get('alg')
 
         # Find matching key in JWKS
         signing_key = None
         for key in jwks.get('keys', []):
             if key.get('kid') == kid:
-                signing_key = jwt.algorithms.RSAAlgorithm.from_jwk(key)
+                # Use appropriate algorithm based on key type
+                key_type = key.get('kty')
+                if key_type == 'RSA':
+                    signing_key = jwt.algorithms.RSAAlgorithm.from_jwk(key)
+                elif key_type == 'EC':
+                    signing_key = jwt.algorithms.ECAlgorithm.from_jwk(key)
+                else:
+                    raise HTTPException(
+                        status_code=401,
+                        detail=f"Unsupported key type: {key_type}"
+                    )
                 break
 
         if not signing_key:
@@ -72,7 +83,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
         payload = jwt.decode(
             token,
             signing_key,
-            algorithms=["RS256"],
+            algorithms=[alg],
             audience="authenticated",
             options={"verify_exp": True}
         )

@@ -48,12 +48,18 @@ def run_spider_standalone(preferences_json):
         # Parse preferences
         preferences = json.loads(preferences_json)
 
+        # Get user_id from environment variable (set by scraper_service.py)
+        user_id = os.environ.get('SCRAPER_USER_ID')
+        if not user_id:
+            raise ValueError("SCRAPER_USER_ID environment variable not set")
+
         # Create crawler process
         process = CrawlerProcess(settings)
 
-        # Run spider
+        # Run spider with user_id
         process.crawl(
             IndeedSpider,
+            user_id=user_id,
             preferences=preferences
         )
 

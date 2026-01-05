@@ -17,8 +17,8 @@ CONCURRENT_REQUESTS_PER_DOMAIN = 1
 DOWNLOAD_DELAY = 3
 RANDOMIZE_DOWNLOAD_DELAY = True
 
-# Cookies
-COOKIES_ENABLED = False
+# Cookies - ENABLE for Cloudflare challenges
+COOKIES_ENABLED = True
 
 # Headers
 DEFAULT_REQUEST_HEADERS = {
@@ -30,25 +30,11 @@ DEFAULT_REQUEST_HEADERS = {
     'Upgrade-Insecure-Requests': '1',
 }
 
-# Playwright configuration
-DOWNLOAD_HANDLERS = {
-    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
-    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+# curl_cffi middleware (bypasses Cloudflare TLS fingerprinting)
+DOWNLOADER_MIDDLEWARES = {
+    'indeed_scraper.curl_middleware.CurlCffiMiddleware': 585,
+    'scrapy.downloadermiddlewares.httpcompression.HttpCompressionMiddleware': None,  # Disable - curl_cffi handles decompression
 }
-
-PLAYWRIGHT_LAUNCH_OPTIONS = {
-    "headless": True,
-    "args": [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-dev-shm-usage",
-        "--no-sandbox",
-    ]
-}
-
-PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 30000
-
-# Twisted reactor for Playwright
-TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
 
 # Retry settings
 RETRY_TIMES = 3
