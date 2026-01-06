@@ -98,3 +98,22 @@ class IndeedScraperDownloaderMiddleware:
 
     def spider_opened(self, spider):
         spider.logger.info("Spider opened: %s" % spider.name)
+
+
+'''
+import random
+
+class ProxyMiddleware:
+    def __init__(self, proxy_list):
+        self.proxy_list = proxy_list
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(
+            proxy_list=crawler.settings.get('ROTATING_PROXY_LIST')
+        )
+
+    def process_request(self, request, spider):
+        proxy = random.choice(self.proxy_list)
+        request.meta['proxy'] = proxy
+'''        

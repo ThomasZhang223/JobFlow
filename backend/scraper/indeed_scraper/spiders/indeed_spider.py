@@ -83,6 +83,16 @@ class IndeedSpider(scrapy.Spider):
         'ROBOTSTXT_OBEY': False,
         'COOKIES_ENABLED': True,  # Required for Cloudflare challenges
         'TELNETCONSOLE_ENABLED': False,
+        'DEFAULT_REQUEST_HEADERS': {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-CA,en-US;q=0.9,en;q=0.8',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Priority': 'u=0, i',
+            'Referer': 'https://www.google.com/',
+        }
     }
     
     def __init__(self, user_id=None, preferences=None, *args, **kwargs):
@@ -186,58 +196,35 @@ class IndeedSpider(scrapy.Spider):
 
     def make_request(self, url, callback, **kwargs):
         """Create a Playwright request with rotating proxy and user agent"""
+        headers = {}
+        
         user_agent = get_random_user_agent()
-        proxy_url = get_proxy()
-
-        self.logger.info(f"Using proxy: {proxy_url[:30]}...")
+        headers['User-Agent'] = user_agent
+        
         self.logger.info(f"Using user agent: {user_agent[:60]}...")
 
-        # Parse proxy URL: http://username:password@host:port/
-        # Example: http://uyddgisl-rotate:xp94bd2fpxkp@p.webshare.io:80/
-        from urllib.parse import urlparse
-        parsed = urlparse(proxy_url)
-
-        # Extract meta and headers from kwargs or create new
-        meta = kwargs.pop('meta', {})
-        headers = kwargs.pop('headers', {})
-
-        # Add browser-like headers
-        headers.update({
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'en-CA,en-US;q=0.9,en;q=0.8',
-            'Priority': 'u=0, i',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Referer': 'https://www.google.com/',
-        })
-
-        # Add Playwright configuration
-        meta['playwright'] = True
-        meta['playwright_include_page'] = True
-        meta['playwright_page_goto_kwargs'] = {'wait_until': 'domcontentloaded', 'timeout': 60000}
-        
-        '''
-        meta['playwright_context_kwargs'] = {
-            'proxy': {
-                'server': f'http://{parsed.hostname}:{parsed.port}',
-                'username': parsed.username,
-                'password': parsed.password
-            },
-            'user_agent': user_agent
-        }
-        '''
-        
-        return scrapy.Request(
+        request = scrapy.Request(
             url=url,
             callback=callback,
             headers=headers,
-            meta=meta,
             **kwargs
         )
+        
+        proxy = get_proxy()
+        request.meta['playwright_context_kwargs'] = {
+            'proxy': {
+                'server': proxy[0],
+                'username': proxy[1],
+                'password': proxy[2]
+            }
+        }
+        
+        self.logger.info(f"Using user agent: {user_agent[:60]}...")
+        self.logger.info(f"Using proxy: {proxy[0]}...")
+        
+        return request
 
-    async def start(self):
+    def start_requests(self):
         """Load multiple pages in parallel"""
         # Calculate pages needed (assume ~13 jobs per page)
         estimated_pages = min(max(1, math.ceil(self.max_results/13)), self.max_pages)
@@ -255,9 +242,13 @@ class IndeedSpider(scrapy.Spider):
                 url=page_url,
                 callback=self.parse_search_results,
                 meta={
-                    'page_number': page_num + 1,  
+                    'playwright': True,
+                    'playwright_include_page': True,
+                    'playwright_page_goto_kwargs': {'wait_until': 'domcontentloaded', 'timeout': 60000},
                     'playwright_page_methods': [
-                            {'method': 'wait_for_timeout', 'args': [wait_time]}]
+                        {'method': 'wait_for_timeout', 'args': [wait_time]}
+                    ],
+                    'page_number': page_num + 1,
                     },
                 errback=self.handle_error,
                 dont_filter=True
@@ -725,7 +716,7 @@ class IndeedSpider(scrapy.Spider):
             try:
                 error_update = {
                     'user_id': self.user_id,
-                    'status': 'error',
+                    'status': 'failed',
                     'jobs_found': self.jobs_scraped,
                     'error_message': str(failure.value),
                     'spider_finished': False

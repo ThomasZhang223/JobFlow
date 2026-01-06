@@ -5,9 +5,6 @@ BOT_NAME = 'indeed_scraper'
 SPIDER_MODULES = ['indeed_scraper.spiders']
 NEWSPIDER_MODULE = 'indeed_scraper.spiders'
 
-# User agent
-USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-
 # Obey robots.txt (set to False for now)
 ROBOTSTXT_OBEY = False
 
@@ -30,14 +27,31 @@ DEFAULT_REQUEST_HEADERS = {
     'Upgrade-Insecure-Requests': '1',
 }
 
-# Playwright middleware
-DOWNLOAD_HANDLERS = {
-    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
-    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
+PLAYWRIGHT_BROWSER_TYPE = "chromium"
+
+'''
+DOWNLOADER_MIDDLEWARES = {
+    'scrapy.downloadermiddlewares.httpproxy.HttpProxyMiddleware': 1,
+    'scrapy.downloadermiddlewares.useragent.UserAgentMiddleware': None,
+    'indeed_scraper.middlewares.ProxyMiddleware': 750,
 }
 
-PLAYWRIGHT_BROWSER_TYPE = "chromium"
-TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
+PROXY_LIST = [
+    'http://uyddgisl:xp94bd2fpxkp@142.111.48.253:7030',
+    'http://uyddgisl:xp94bd2fpxkp@23.95.150.145:6114',
+    'http://uyddgisl:xp94bd2fpxkp@198.23.239.134:6540',
+    'http://uyddgisl:xp94bd2fpxkp@107.172.163.27:6543',
+    'http://uyddgisl:xp94bd2fpxkp@198.105.121.200:6462',
+    'http://uyddgisl:xp94bd2fpxkp@64.137.96.74:6641',
+    'http://uyddgisl:xp94bd2fpxkp@84.247.60.125:6095',
+    'http://uyddgisl:xp94bd2fpxkp@216.10.27.159:6837',
+    'http://uyddgisl:xp94bd2fpxkp@23.26.71.145:5628',
+    'http://uyddgisl:xp94bd2fpxkp@23.27.208.120:5830',
+]
+
+ROTATING_PROXY_LIST = PROXY_LIST
+'''
 
 # Retry settings
 RETRY_TIMES = 3

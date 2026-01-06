@@ -25,6 +25,7 @@ wheels/
 *.egg
 pip-log.txt
 pip-delete-this-directory.txt
+proxies.py
 
 # Virtual environments
 .venv
