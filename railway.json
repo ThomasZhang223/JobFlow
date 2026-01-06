@@ -1,0 +1,32 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "watchPatterns": [
+      "/backend/**"
+    ],
+    "nixpacksPlan": {
+      "phases": {
+        "setup": {
+          "nixPkgs": ["...", "playwright-driver", "chromium"]
+        },
+        "install": {
+          "cmds": [
+            "cd backend && pip install -r requirements.txt",
+            "playwright install chromium --with-deps"
+          ]
+        }
+      },
+      "start": {
+        "cmd": "cd backend && celery -A worker.celery_app worker --loglevel=info --concurrency=1"
+      },
+      "variables": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  },
+  "deploy": {
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
