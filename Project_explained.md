@@ -1392,4 +1392,232 @@ send_websocket_update(user_id, {
 
 ---
 
-**Last Updated:** 2026-01-04
+**Last Updated:** 2026-01-06
+
+---
+
+## Recent Updates (2026-01-06)
+
+### Scraper Infrastructure Changes
+
+#### 1. Playwright with Rotating Proxies
+- **Switched back to Playwright** from Selenium for better performance
+- **Webshare Rotating Proxies** integration for IP rotation
+  - File: `backend/scraper/indeed_scraper/proxies.py`
+  - Each request gets a different IP automatically
+  - Proxy: `http://uyddgisl-rotate:xp94bd2fpxkp@p.webshare.io:80/`
+
+```python
+# proxies.py
+def get_proxy():
+    """Get Webshare rotating proxy - returns proxy URL string"""
+    return "http://uyddgisl-rotate:xp94bd2fpxkp@p.webshare.io:80/"
+
+# indeed_spider.py - make_request()
+meta['playwright_context_kwargs'] = {
+    'proxy': {
+        'server': f'http://{parsed.hostname}:{parsed.port}',
+        'username': parsed.username,
+        'password': parsed.password
+    },
+    'user_agent': user_agent
+}
+```
+
+#### 2. Parallel vs Sequential Loading
+- **Parallel loading**: Yields all page requests at once for faster scraping
+- **Issue**: Concurrent requests with proxies trigger 403 Forbidden errors
+- **Current setting**: `CONCURRENT_REQUESTS = 1` (sequential) to avoid blocks
+- **Trade-off**: Slower but more reliable
+
+```python
+# Parallel loading strategy
+async def start(self):
+    estimated_pages = min(max(1, math.ceil(self.max_results/13)), self.max_pages)
+
+    for page_num in range(estimated_pages):
+        yield self.make_request(
+            url=page_url,
+            callback=self.parse_search_results,
+            meta={'page_number': page_num + 1},
+            dont_filter=True  # Allow parallel requests
+        )
+```
+
+#### 3. Redis Publishing with Upstash
+- **Changed from** `redis` to `upstash_redis` library
+- **Reason**: Upstash requires REST API client, not TCP client
+- **Impact**: Real-time updates now work correctly from spider subprocess
+
+```python
+# Old (broken)
+import redis
+r = redis.from_url(connection_link)
+r.publish(channel, message)
+
+# New (working)
+from upstash_redis import Redis
+r = Redis(url=upstash_redis_rest_url, token=upstash_redis_rest_token)
+r.publish(channel, message)
+```
+
+#### 4. Enhanced Error Publishing
+- **403 Errors**: Now publishes failure update with error details
+- **Non-timeout errors**: Publishes error update in `handle_error()`
+- **Bot detection**: Publishes failure when auth redirect detected
+
+```python
+# Parse errors (403, bot detection)
+if 'secure.indeed.com/auth' in response.url or response.status >= 400:
+    error_msg = f'HTTP {response.status} error' if response.status >= 400 else 'Bot detection'
+    failure_update = {
+        'user_id': self.user_id,
+        'status': 'failed',
+        'jobs_found': self.jobs_scraped,
+        'error_message': error_msg,
+        'spider_finished': True
+    }
+    publish_update(failure_update)
+
+# Request errors (network, timeout)
+error_update = {
+    'user_id': self.user_id,
+    'status': 'error',
+    'jobs_found': self.jobs_scraped,
+    'error_message': str(failure.value),
+    'spider_finished': False
+}
+publish_update(error_update)
+```
+
+### Database Statistics Management
+
+#### Automated Statistics with SQL Triggers
+- **Replaced** manual Python updates with database triggers
+- **Benefits**: Atomic, consistent, no race conditions
+- **Triggers handle**: job inserts, deletes, priority toggles
+
+```sql
+-- Auto-increment on job insert
+CREATE FUNCTION update_stats_on_job_insert()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE user_statistics
+    SET
+        current_jobs = current_jobs + 1,
+        total_jobs = total_jobs + 1
+    WHERE user_id = NEW.user_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Auto-decrement on job delete
+CREATE FUNCTION update_stats_on_job_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE user_statistics
+    SET
+        current_jobs = current_jobs - 1,
+        saved_jobs = CASE
+            WHEN OLD.priority = true THEN saved_jobs - 1
+            ELSE saved_jobs
+        END
+    WHERE user_id = OLD.user_id;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Update saved_jobs on priority toggle
+CREATE FUNCTION update_stats_on_job_update()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.priority != NEW.priority THEN
+        UPDATE user_statistics
+        SET saved_jobs = CASE
+            WHEN NEW.priority = true THEN saved_jobs + 1
+            ELSE saved_jobs - 1
+        END
+        WHERE user_id = NEW.user_id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+#### Statistics Fields
+- **total_jobs**: Total jobs ever scraped (increments only)
+- **current_jobs**: Jobs in inbox (not saved/completed)
+- **saved_jobs**: Jobs marked as priority
+- **completed_jobs**: Jobs user has completed/applied to
+- **total_scrapes**: Number of scrape sessions run
+
+### Scrape Length Updates
+Changed to smaller, more reasonable values:
+
+```python
+class ScrapeLength(int, Enum):
+    SHORT = 10    # was 50
+    MEDIUM = 25   # was 150
+    LONG = 50     # was 250
+```
+
+**Reasoning**:
+- Faster scrapes reduce bot detection risk
+- Most users don't need 150+ jobs
+- Easier to stay under rate limits
+
+### Anti-Bot Measures
+
+#### Current Stack
+1. **Playwright**: Full browser automation (executes JavaScript)
+2. **Rotating Proxies**: Different IP per request via Webshare
+3. **User-Agent Rotation**: Random UA from pool
+4. **Browser Headers**: Sec-Fetch-*, Referer, Priority
+5. **Sequential Loading**: Avoid parallel request fingerprinting
+
+#### Known Issues
+- **403 Forbidden**: Parallel requests trigger rate limits
+- **Cloudflare WAF**: Can still block despite proxies
+- **Solution**: Use `CONCURRENT_REQUESTS = 1` for reliability
+
+### Configuration Files
+
+#### Settings.py
+```python
+# Playwright middleware
+DOWNLOAD_HANDLERS = {
+    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+}
+
+PLAYWRIGHT_BROWSER_TYPE = "chromium"
+TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
+```
+
+#### Spider Custom Settings
+```python
+custom_settings = {
+    'DOWNLOAD_DELAY': 3,
+    'CONCURRENT_REQUESTS': 1,  # Sequential to avoid 403
+    'CONCURRENT_REQUESTS_PER_DOMAIN': 1,
+    'RANDOMIZE_DOWNLOAD_DELAY': False,
+    'RETRY_TIMES': 3,
+    'AUTOTHROTTLE_ENABLED': True,
+    'AUTOTHROTTLE_START_DELAY': 5,
+    'AUTOTHROTTLE_MAX_DELAY': 15,
+}
+```
+
+#### Requirements.txt Updates
+```
+# Scraper
+scrapy>=2.13.4
+scrapy-playwright>=0.0.34
+playwright>=1.40.0
+
+# Task Queue
+upstash-redis>=0.15.0  # For REST API (subprocess publishing)
+redis>=7.1.0           # For TCP (main app pub/sub)
+```
+
+---

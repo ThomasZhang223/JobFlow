@@ -30,11 +30,14 @@ DEFAULT_REQUEST_HEADERS = {
     'Upgrade-Insecure-Requests': '1',
 }
 
-# curl_cffi middleware (bypasses Cloudflare TLS fingerprinting)
-DOWNLOADER_MIDDLEWARES = {
-    'indeed_scraper.curl_middleware.CurlCffiMiddleware': 585,
-    'scrapy.downloadermiddlewares.httpcompression.HttpCompressionMiddleware': None,  # Disable - curl_cffi handles decompression
+# Playwright middleware
+DOWNLOAD_HANDLERS = {
+    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
 }
+
+PLAYWRIGHT_BROWSER_TYPE = "chromium"
+TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
 
 # Retry settings
 RETRY_TIMES = 3

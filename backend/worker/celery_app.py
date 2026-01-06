@@ -1,16 +1,16 @@
 import redis
 import asyncio
 from celery import Celery
-from celery.schedules import crontab
 
 from app.core.config import settings
 from app.services import email_service
 from app.schemas.messages import ScrapeUpdateMessage, Status
 
-celery_app = Celery('jobflow', broker=settings.redis_url, backend=settings.redis_url)
+connection_link = f"rediss://:{settings.upstash_redis_rest_token}@{settings.upstash_redis_rest_url[8:]}:{settings.upstash_redis_port}?ssl_cert_reqs=required"
+celery_app = Celery('jobflow', broker=connection_link, backend=connection_link)
 
 def publish_update(message: ScrapeUpdateMessage):
-    r = redis.from_url(settings.redis_url)
+    r = redis.from_url(connection_link)
     r.publish(settings.scrape_update_channel, message.model_dump_json())
     r.close()
     

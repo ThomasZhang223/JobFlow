@@ -70,7 +70,7 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   description: "",
   benefits: "",
   radius: undefined,
-  scrape_length: 150, // MEDIUM
+  scrape_length: 25, // MEDIUM
 };
 
 export default function JobFlowScraper() {
@@ -824,6 +824,34 @@ export default function JobFlowScraper() {
                           <div className="flex gap-2">
                             <button
                               onClick={() => {
+                                const newPreferences = { ...draftPreferences, scrape_length: 10 };
+                                setDraftPreferences(newPreferences);
+                                saveUserPreferences(newPreferences);
+                              }}
+                              className={`flex-1 px-3 py-2 text-sm rounded-md transition-colors ${
+                                draftPreferences.scrape_length === 10
+                                  ? "bg-blue-600 text-white"
+                                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                              }`}
+                            >
+                              Short (10 jobs)
+                            </button>
+                            <button
+                              onClick={() => {
+                                const newPreferences = { ...draftPreferences, scrape_length: 25 };
+                                setDraftPreferences(newPreferences);
+                                saveUserPreferences(newPreferences);
+                              }}
+                              className={`flex-1 px-3 py-2 text-sm rounded-md transition-colors ${
+                                draftPreferences.scrape_length === 25
+                                  ? "bg-blue-600 text-white"
+                                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                              }`}
+                            >
+                              Medium (25 jobs)
+                            </button>
+                            <button
+                              onClick={() => {
                                 const newPreferences = { ...draftPreferences, scrape_length: 50 };
                                 setDraftPreferences(newPreferences);
                                 saveUserPreferences(newPreferences);
@@ -834,35 +862,7 @@ export default function JobFlowScraper() {
                                   : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                               }`}
                             >
-                              Short (50 jobs)
-                            </button>
-                            <button
-                              onClick={() => {
-                                const newPreferences = { ...draftPreferences, scrape_length: 150 };
-                                setDraftPreferences(newPreferences);
-                                saveUserPreferences(newPreferences);
-                              }}
-                              className={`flex-1 px-3 py-2 text-sm rounded-md transition-colors ${
-                                draftPreferences.scrape_length === 150
-                                  ? "bg-blue-600 text-white"
-                                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                              }`}
-                            >
-                              Medium (150 jobs)
-                            </button>
-                            <button
-                              onClick={() => {
-                                const newPreferences = { ...draftPreferences, scrape_length: 250 };
-                                setDraftPreferences(newPreferences);
-                                saveUserPreferences(newPreferences);
-                              }}
-                              className={`flex-1 px-3 py-2 text-sm rounded-md transition-colors ${
-                                draftPreferences.scrape_length === 250
-                                  ? "bg-blue-600 text-white"
-                                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                              }`}
-                            >
-                              Long (250 jobs)
+                              Long (50 jobs)
                             </button>
                           </div>
                         </div>

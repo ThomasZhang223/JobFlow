@@ -3,9 +3,9 @@ from typing import Optional
 from enum import Enum
 
 class ScrapeLength(int, Enum):
-    SHORT = 50      
-    MEDIUM = 150     
-    LONG = 250      
+    SHORT = 10
+    MEDIUM = 25
+    LONG = 50      
 
 
 class Job(BaseModel):

@@ -14,19 +14,20 @@ class RedisClient:
     Async Redis client defintion for pub/sub messages
     Validation and handler function defined in main for API
     """
-    
+
     def __init__(self):
-        self.url = settings.redis_url
+        # Build TCP connection URL for pub/sub (REST API doesn't support pub/sub)
+        self.url = f"rediss://:{settings.upstash_redis_rest_token}@{settings.upstash_redis_rest_url[8:]}:{settings.upstash_redis_port}?ssl_cert_reqs=required"
         self.redis = None
         self.pubsub = None
         self.subscriber_task = None
-    
+
     async def connect(self):
         try:
             self.redis = Redis.from_url(self.url)
             await self.redis.ping()
-            print(f'Redis connection success at {self.url} \n')
-            
+            print(f'Redis connection success (TCP) \n')
+
         except Exception as e:
             print(f"Redis Connection failed: {e}")
             self.redis = None

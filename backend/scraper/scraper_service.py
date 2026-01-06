@@ -8,7 +8,6 @@ import sys
 import os
 import json
 import subprocess
-import time
 
 # Add paths for imports
 current_dir = os.path.dirname(__file__)
@@ -20,13 +19,12 @@ if backend_dir not in sys.path:
 
 from app.core.config import settings
 from app.schemas.messages import ScrapeUpdateMessage, Status
-from app.schemas.database_tables import Job, ScrapeLength
-from app.services import database_service
-
+            
+connection_link = f"rediss://:{settings.upstash_redis_rest_token}@{settings.upstash_redis_rest_url[8:]}:{settings.upstash_redis_port}?ssl_cert_reqs=required"
 
 def publish_update(message: ScrapeUpdateMessage):
     """Publish scrape update to Redis for real-time frontend updates"""
-    r = redis.from_url(settings.redis_url)
+    r = redis.from_url(connection_link)
     r.publish(settings.scrape_update_channel, message.model_dump_json())
     r.close()
 
@@ -70,7 +68,9 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         # Run spider subprocess
         # Pass only essential settings to subprocess via environment variables
         env = os.environ.copy()
-        env['REDIS_URL'] = settings.redis_url
+        env['UPSTASH_REDIS_REST_URL'] = settings.upstash_redis_rest_url
+        env['UPSTASH_REDIS_REST_TOKEN'] = settings.upstash_redis_rest_token
+        env['UPSTASH_REDIS_PORT'] = str(settings.upstash_redis_port)
         env['SCRAPE_UPDATE_CHANNEL'] = settings.scrape_update_channel
         env['SCRAPER_USER_ID'] = user_id  # Pass user_id to subprocess
         env['SUPABASE_URL'] = settings.supabase_url
@@ -84,7 +84,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         ], stdout=None, stderr=None, text=True, env=env)
 
         # Listen for Redis messages from spider to get final job count
-        r = redis.from_url(settings.redis_url)
+        r = redis.from_url(connection_link)
         pubsub = r.pubsub()
         pubsub.subscribe(settings.scrape_update_channel)
 
@@ -116,7 +116,7 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
                         print(f"Failed to parse Redis message: {e}")
 
             # Wait for subprocess to complete
-            process.wait(timeout=settings.scraper_timeout_seconds)
+            process.wait(timeout=600)
             returncode = process.returncode
 
         except subprocess.TimeoutExpired:

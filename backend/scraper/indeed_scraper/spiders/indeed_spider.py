@@ -8,6 +8,7 @@ import json
 
 # Import anti-bot measures
 from indeed_scraper.user_agents import get_random_user_agent
+from indeed_scraper.proxies import get_proxy
 
 # Add paths for imports
 current_dir = os.path.dirname(__file__)
@@ -26,17 +27,24 @@ def publish_update(message):
         import redis
 
         # Read Redis settings from environment variables
-        redis_url = os.environ.get('REDIS_URL')
+        upstash_redis_rest_url = os.environ.get('UPSTASH_REDIS_REST_URL')
+        upstash_redis_rest_token = os.environ.get('UPSTASH_REDIS_REST_TOKEN')
+        upstash_redis_port = os.environ.get('UPSTASH_REDIS_PORT')
         scrape_update_channel = os.environ.get('SCRAPE_UPDATE_CHANNEL')
 
-        if not redis_url or not scrape_update_channel:
+        if not upstash_redis_rest_url or not upstash_redis_rest_token or not scrape_update_channel:
             print(f'No Redis connection available')
             return
 
-        r = redis.from_url(redis_url)
+        # Build TCP connection URL (same as backend)
+        connection_url = f"rediss://:{upstash_redis_rest_token}@{upstash_redis_rest_url[8:]}:{upstash_redis_port}?ssl_cert_reqs=required"
+
+        # Create Redis client with TCP connection
+        r = redis.from_url(connection_url)
 
         message_json = json.dumps(message)
 
+        # Publish via TCP (so backend subscriber receives it)
         r.publish(scrape_update_channel, message_json)
         r.close()
 
@@ -56,11 +64,11 @@ class IndeedSpider(scrapy.Spider):
     allowed_domains = [base_domain]
     
     custom_settings = {
-        # HUMAN-LIKE APPROACH: Sequential requests with realistic delays
-        'DOWNLOAD_DELAY': 6,  # 6 seconds between requests (human-like)
-        'CONCURRENT_REQUESTS': 1,  # Only 1 request at a time
-        'CONCURRENT_REQUESTS_PER_DOMAIN': 1,  # Only 1 to Indeed at a time
-        'RANDOMIZE_DOWNLOAD_DELAY': True,
+        # PARALLEL LOADING: Multiple pages at once
+        'DOWNLOAD_DELAY': 1,
+        'CONCURRENT_REQUESTS': 4,  
+        'CONCURRENT_REQUESTS_PER_DOMAIN': 4,
+        'RANDOMIZE_DOWNLOAD_DELAY': False,
         'RETRY_TIMES': 3,
 
         # AUTOTHROTTLE: Let Scrapy adjust speed based on server response
@@ -75,19 +83,6 @@ class IndeedSpider(scrapy.Spider):
         'ROBOTSTXT_OBEY': False,
         'COOKIES_ENABLED': True,  # Required for Cloudflare challenges
         'TELNETCONSOLE_ENABLED': False,
-        'DEFAULT_REQUEST_HEADERS': {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'en-CA,en-US;q=0.9,en;q=0.8',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"macOS"',
-            'Priority': 'u=0, i',
-            'Referer': 'https://www.google.com/',
-        }
     }
     
     def __init__(self, user_id=None, preferences=None, *args, **kwargs):
@@ -188,26 +183,82 @@ class IndeedSpider(scrapy.Spider):
         self.logger.info(f"Job Type Filters: {self.preferred_job_types}")
         self.logger.info(f"Salary Filters: {self.preferred_salaries}")
         self.logger.info(f"Description Filters: {self.preferred_descriptions}")
-    
-    def start_requests(self):
-        """Generate parallel requests to multiple pages simultaneously to bypass anti-bot detection"""
-        # Calculate how many pages we might need based on max_results
-        # Assume ~10-16 jobs per page, so we need roughly max_results/13 pages
-        estimated_pages_needed = min(max(1, math.ceil(self.max_results/13)), self.max_pages)
 
-        self.logger.info(f"=== PARALLEL PAGE LOADING STRATEGY ===")
-        self.logger.info(f"Max results: {self.max_results}, Estimated pages needed: {estimated_pages_needed}")
+    def make_request(self, url, callback, **kwargs):
+        """Create a Playwright request with rotating proxy and user agent"""
+        user_agent = get_random_user_agent()
+        proxy_url = get_proxy()
 
-        # Generate URLs for multiple pages simultaneously
-        for page_num in range(estimated_pages_needed):
+        self.logger.info(f"Using proxy: {proxy_url[:30]}...")
+        self.logger.info(f"Using user agent: {user_agent[:60]}...")
+
+        # Parse proxy URL: http://username:password@host:port/
+        # Example: http://uyddgisl-rotate:xp94bd2fpxkp@p.webshare.io:80/
+        from urllib.parse import urlparse
+        parsed = urlparse(proxy_url)
+
+        # Extract meta and headers from kwargs or create new
+        meta = kwargs.pop('meta', {})
+        headers = kwargs.pop('headers', {})
+
+        # Add browser-like headers
+        headers.update({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-CA,en-US;q=0.9,en;q=0.8',
+            'Priority': 'u=0, i',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Referer': 'https://www.google.com/',
+        })
+
+        # Add Playwright configuration
+        meta['playwright'] = True
+        meta['playwright_include_page'] = True
+        meta['playwright_page_goto_kwargs'] = {'wait_until': 'domcontentloaded', 'timeout': 60000}
+        
+        '''
+        meta['playwright_context_kwargs'] = {
+            'proxy': {
+                'server': f'http://{parsed.hostname}:{parsed.port}',
+                'username': parsed.username,
+                'password': parsed.password
+            },
+            'user_agent': user_agent
+        }
+        '''
+        
+        return scrapy.Request(
+            url=url,
+            callback=callback,
+            headers=headers,
+            meta=meta,
+            **kwargs
+        )
+
+    async def start(self):
+        """Load multiple pages in parallel"""
+        # Calculate pages needed (assume ~13 jobs per page)
+        estimated_pages = min(max(1, math.ceil(self.max_results/13)), self.max_pages)
+
+        self.logger.info(f"=== PARALLEL LOADING {estimated_pages} PAGES ===")
+
+        # Yield all page requests at once
+        for page_num in range(estimated_pages):
             page_url = self.get_indeed_search_url(page_num)
-
-            self.logger.info(f"Queuing page {page_num + 1}: {page_url}")
-
-            yield scrapy.Request(
+            
+            # Stagger the requests slightly to avoid simultaneous hits
+            wait_time = 2000 + (page_num * 1000)  # 2s, 3s, 4s, etc.  
+                  
+            yield self.make_request(
                 url=page_url,
-                callback=self.parse_search_results_parallel,
-                meta={'page_number': page_num + 1},
+                callback=self.parse_search_results,
+                meta={
+                    'page_number': page_num + 1,  
+                    'playwright_page_methods': [
+                            {'method': 'wait_for_timeout', 'args': [wait_time]}]
+                    },
                 errback=self.handle_error,
                 dont_filter=True
             )
@@ -229,31 +280,31 @@ class IndeedSpider(scrapy.Spider):
             
         return f"https://{self.base_domain}/jobs?{urlencode(params)}"
     
-    def parse_search_results_parallel(self, response):
-        """Parse search results for parallel loading strategy"""
+    def parse_search_results(self, response):
+        """Parse search results from parallel pages"""
         page_num = response.meta.get('page_number')
         self.pages_visited += 1
 
         self.logger.info(f"Parsing page {page_num}: {response.url} (status: {response.status})")
 
-        # Check for HTTP errors (403 Forbidden, etc.)
-        if response.status >= 400:
-            self.logger.error(f"HTTP {response.status} on page {page_num} - Access denied")
+        # Check for bot detection or HTTP errors
+        if 'secure.indeed.com/auth' in response.url or response.status >= 400:
+            error_msg = f'HTTP {response.status} error on page {page_num}' if response.status >= 400 else 'Bot detection redirect'
             try:
                 failure_update = {
                     'user_id': self.user_id,
                     'status': 'failed',
                     'jobs_found': self.jobs_scraped,
-                    'error_message': f'HTTP {response.status} - Access denied by Indeed',
+                    'error_message': error_msg,
                     'spider_finished': True
                 }
                 publish_update(failure_update)
-                self.logger.info(f"Published HTTP error update")
             except Exception as e:
                 self.logger.error(f"Failed to publish failure update: {e}")
-            return  # Stop processing this page
+            self.logger.error(error_msg)
+            return
 
-        # Find job cards using multiple possible selectors
+        # Find job cards
         job_cards = (
             response.css('div.job_seen_beacon') or
             response.css('td.resultContent') or
@@ -262,41 +313,36 @@ class IndeedSpider(scrapy.Spider):
 
         self.logger.info(f"Found {len(job_cards)} job cards on page {page_num}")
 
-        # Process jobs from this page
+        # Process jobs
         for card in job_cards:
-            # Exceeded limit
             if self.jobs_scraped >= self.max_results:
-                self.logger.info(f"Reached max limit: {self.max_results}")
                 break
 
             job_data = self.parse_job_card(card)
 
             if job_data and self.matches_preferences(job_data):
-                # Save job to database immediately with duplicate checking
                 try:
                     was_saved = self.save_job_to_database(job_data)
                     if was_saved:
                         self.jobs_scraped += 1
-                        self.logger.info(f"Saved job {self.jobs_scraped}: {job_data.get('title')} at {job_data.get('company_name')} (from page {page_num})")
-                        yield job_data # not currently used, maybe for future features?
+                        self.logger.info(f"Saved job {self.jobs_scraped}: {job_data.get('title')} at {job_data.get('company_name')} (page {page_num})")
+                        yield job_data
                     else:
-                        self.logger.info(f"Duplicate skipped: {job_data.get('title')} at {job_data.get('company_name')} (from page {page_num})")
+                        self.logger.info(f"Duplicate skipped: {job_data.get('title')} at {job_data.get('company_name')}")
                 except Exception as e:
-                    self.logger.error(f"Failed to save job to database: {e}")
-                    # Continue processing even if one job fails to save
+                    self.logger.error(f"Failed to save job: {e}")
 
-        # Publish page completion update
+        # Publish page update
         try:
             page_update = {
                 'user_id': self.user_id,
                 'status': 'running',
-                'jobs_found': self.jobs_scraped, 
+                'jobs_found': self.jobs_scraped,
                 'page_completed': page_num,
             }
             publish_update(page_update)
-            self.logger.info(f"Published page {page_num} update: {self.jobs_scraped} total jobs saved so far")
         except Exception as e:
-            self.logger.error(f"Failed to publish page update: {e}")
+            self.logger.error(f"Failed to publish update: {e}")
 
     def parse_job_card(self, card):
         """Extract job data from a job card"""
@@ -546,9 +592,10 @@ class IndeedSpider(scrapy.Spider):
                 self.logger.info(f"❌ FILTERED OUT: No company match. Prefer: {self.preferred_company_name}, actual: {job_company}")
                 return False
             
-        # Check if job matches ANY of the job type preferences (case-insensitive substring)
+        # Check if job matches ANY of the job type preferences (case-insensitive substring) --- checks both title and job type
         if self.preferred_job_types:
-            job_type_match = any(pref_type.lower().strip() in job_type.lower().strip()
+            job_type_match = any(pref_type.lower().strip() in job_type.lower().strip() or
+                                pref_type.lower().strip() in job_title.lower().strip()
                                for pref_type in self.preferred_job_types if pref_type.strip())
             if not job_type_match:
                 self.logger.info(f"❌ FILTERED OUT: No job type match. Prefer: {self.preferred_job_types}, actual: {job_type}")
@@ -636,7 +683,6 @@ class IndeedSpider(scrapy.Spider):
             if current.data:
                 stats = current.data[0]
             stats['total_jobs'] += 1
-            stats['current_jobs'] += 1
             stats['latest_scrape'] = datetime.now().astimezone().isoformat()
             stats_result = supabase.table('user_statistics').update(stats).eq('user_id', user_id).execute()
             
@@ -671,9 +717,23 @@ class IndeedSpider(scrapy.Spider):
             # The spider will complete and return the jobs it has collected
             return
         else:
-            # For non-timeout errors, log and continue
+            # For non-timeout errors, publish failure update
             self.logger.error(f"Non-timeout error occurred: {failure.value}")
             self.logger.info(f"Continuing with {self.jobs_scraped} jobs found so far")
+
+            # Publish error update
+            try:
+                error_update = {
+                    'user_id': self.user_id,
+                    'status': 'error',
+                    'jobs_found': self.jobs_scraped,
+                    'error_message': str(failure.value),
+                    'spider_finished': False
+                }
+                publish_update(error_update)
+            except Exception as e:
+                self.logger.error(f"Failed to publish error update: {e}")
+
             return
     
     def closed(self, reason):
