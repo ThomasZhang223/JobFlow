@@ -1,8 +1,15 @@
-[build]
-builder = "NIXPACKS"
+[phases.setup]
+nixPkgs = ['...', 'playwright-driver', 'chromium']
 
-[nixpacksPlan]
-providers = [
-  "...",
-  "python3"
+[phases.install]
+cmds = [
+  'cd backend',
+  'pip install -r requirements.txt',
+  'playwright install chromium --with-deps'
 ]
+
+[start]
+cmd = 'cd backend && celery -A worker.celery_app worker --loglevel=info --concurrency=1'
+
+[variables]
+PYTHONUNBUFFERED = '1'
