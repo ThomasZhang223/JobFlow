@@ -31,6 +31,7 @@ class RedisClient:
         except Exception as e:
             print(f"Redis Connection failed: {e}")
             self.redis = None
+            raise ConnectionError(f"Failed to connect to Redis: {e}") from e
         
     async def disconnect(self):
         if self.subscriber_task:

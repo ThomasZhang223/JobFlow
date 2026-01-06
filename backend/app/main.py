@@ -34,13 +34,19 @@ async def handle_scrape_update(message: dict):
 async def lifespan(app: FastAPI):
     # STARTUP
     print("\nStart API\n")
-    
-    await redis_client.connect()
-    await redis_client.subscribe(settings.scrape_update_channel, handle_scrape_update)
-    
+
+    try:
+        await redis_client.connect()
+        await redis_client.subscribe(settings.scrape_update_channel, handle_scrape_update)
+        print("Redis pub/sub initialized successfully\n")
+    except ConnectionError as e:
+        print(f"\n⚠️  CRITICAL: Redis connection failed during startup")
+        print(f"Error: {e}")
+        raise
+
     # MAIN PROGRAM FLOW
     yield
-    
+
     # SHUTDOWN
     await redis_client.disconnect()
     print("\nShutdown API\n")

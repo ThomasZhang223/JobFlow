@@ -11,7 +11,7 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Get API URL from environment variable
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const WS_URL = API_URL.replace('https', 'ws');
 
 interface ScrapeUpdate {

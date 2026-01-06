@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         return json.loads(self.allowed_origins)
 
     # Redis - Upstash
-    upstash_redis_port: int = 6379 # TCP connection URL for Celery and pub/sub (rediss://...)
+    upstash_redis_port: int 
     upstash_redis_rest_url: str
     upstash_redis_rest_token: str
     scrape_update_channel: str = "scrape_update"
