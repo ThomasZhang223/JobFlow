@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_key: str
     
+    # Proxies
+    proxy_str: str
+    
+    @property
+    def proxies_list(self) -> list[str]:
+        """Parse JSON array of origins into a list"""
+        return json.loads(self.proxy_str)
+    
+    proxy_username: str
+    proxy_password: str
+    
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

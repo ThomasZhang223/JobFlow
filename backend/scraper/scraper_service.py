@@ -75,6 +75,9 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         env['SCRAPER_USER_ID'] = user_id  # Pass user_id to subprocess
         env['SUPABASE_URL'] = settings.supabase_url
         env['SUPABASE_KEY'] = settings.supabase_key
+        env['PROXY_STR'] = settings.proxy_str
+        env['PROXY_USERNAME'] = settings.proxy_username
+        env['PROXY_PASSWORD'] = settings.proxy_password
 
         # Use Popen for real-time output streaming
         print("=== STARTING SPIDER SUBPROCESS ===")
