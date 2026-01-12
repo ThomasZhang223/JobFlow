@@ -1,0 +1,14 @@
+# Documentation files
+Project_explained.md
+setup_guide.md
+
+# Shell scripts for local development
+start_api.sh
+start_worker.sh
+
+# Environment variables
+.env
+.env.local
+
+# OS files
+.DS_Store
