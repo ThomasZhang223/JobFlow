@@ -26,6 +26,10 @@ wheels/
 pip-log.txt
 pip-delete-this-directory.txt
 
+Project_explained
+setup_guide
+
+
 # Virtual environments
 .venv
 venv/
