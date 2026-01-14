@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_key: str
     
+    # Email
+    email_password: str
+    
     # Proxies
     proxy_str: str
     
