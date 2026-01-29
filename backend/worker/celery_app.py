@@ -6,11 +6,14 @@ from app.core.config import settings
 from app.services import email_service
 from app.schemas.messages import ScrapeUpdateMessage, Status
 
-connection_link = f"rediss://:{settings.upstash_redis_rest_token}@{settings.upstash_redis_rest_url[8:]}:{settings.upstash_redis_port}?ssl_cert_reqs=required"
-celery_app = Celery('jobflow', broker=connection_link, backend=connection_link)
+# For production Upstash (SSL):
+# connection_link = f"rediss://:{settings.upstash_redis_rest_token}@{settings.upstash_redis_rest_url[8:]}:{settings.upstash_redis_port}?ssl_cert_reqs=required"
+
+celery_app = Celery('jobflow', broker=settings.redis_url, backend=settings.redis_url)
 
 def publish_update(message: ScrapeUpdateMessage):
-    r = redis.from_url(connection_link)
+    #r = redis.from_url(connection_link)
+    r = redis.from_url(settings.redis_url)
     r.publish(settings.scrape_update_channel, message.model_dump_json())
     r.close()
     
@@ -41,7 +44,7 @@ def run_scrape(user_id: str, preferences: dict):
         error_msg = str(e) if str(e) else "Unknown error"
         print(f"Scrape task failed: {error_msg}")
 
-        update = ScrapeUpdateMessage(status=Status.FAILED, jobs_found=0, error_message=error_msg)
+        update = ScrapeUpdateMessage(user_id=user_id, status=Status.FAILED, jobs_found=0, error_message=error_msg)
         publish_update(update)
 
         asyncio.run(email_service.send_scrape_failed_email(user_id, update, preferences))

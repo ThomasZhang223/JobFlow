@@ -19,12 +19,13 @@ if backend_dir not in sys.path:
 
 from app.core.config import settings
 from app.schemas.messages import ScrapeUpdateMessage, Status
-            
-connection_link = f"rediss://:{settings.upstash_redis_rest_token}@{settings.upstash_redis_rest_url[8:]}:{settings.upstash_redis_port}?ssl_cert_reqs=required"
+
+# For production Upstash (SSL):
+# connection_link = f"rediss://:{settings.upstash_redis_rest_token}@{settings.upstash_redis_rest_url[8:]}:{settings.upstash_redis_port}?ssl_cert_reqs=required"
 
 def publish_update(message: ScrapeUpdateMessage):
     """Publish scrape update to Redis for real-time frontend updates"""
-    r = redis.from_url(connection_link)
+    r = redis.from_url(settings.redis_url)
     r.publish(settings.scrape_update_channel, message.model_dump_json())
     r.close()
 
@@ -68,9 +69,12 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         # Run spider subprocess
         # Pass only essential settings to subprocess via environment variables
         env = os.environ.copy()
+        """
         env['UPSTASH_REDIS_REST_URL'] = settings.upstash_redis_rest_url
         env['UPSTASH_REDIS_REST_TOKEN'] = settings.upstash_redis_rest_token
         env['UPSTASH_REDIS_PORT'] = str(settings.upstash_redis_port)
+        """
+        env['REDIS_URL'] = settings.redis_url
         env['SCRAPE_UPDATE_CHANNEL'] = settings.scrape_update_channel
         env['SCRAPER_USER_ID'] = user_id  # Pass user_id to subprocess
         env['SUPABASE_URL'] = settings.supabase_url
@@ -87,7 +91,8 @@ def run_scraper_with_preferences(user_id: str, preferences: dict) -> ScrapeUpdat
         ], stdout=None, stderr=None, text=True, env=env)
 
         # Listen for Redis messages from spider to get final job count
-        r = redis.from_url(connection_link)
+        #r = redis.from_url(connection_link)
+        r = redis.from_url(settings.redis_url)
         pubsub = r.pubsub()
         pubsub.subscribe(settings.scrape_update_channel)
 

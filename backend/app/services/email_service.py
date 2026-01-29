@@ -179,7 +179,7 @@ conf = ConnectionConfig(
 )
 
 async def send_scrape_complete_email(user_id: str, jobs_found: int, preferences: Preference):
-    template = Template(MAIL_SUCCESS_TEMPLATE)
+    template = Template(EMAIL_SUCCESS_TEMPLATE)
     html_content = template.render(
         jobs_found=jobs_found,
         preferences=preferences,

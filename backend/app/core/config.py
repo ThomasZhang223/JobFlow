@@ -16,8 +16,11 @@ class Settings(BaseSettings):
         """Parse JSON array of origins into a list"""
         return json.loads(self.allowed_origins)
 
+    # Redis - Docker
+    redis_url: str
+
     # Redis - Upstash
-    upstash_redis_port: int 
+    upstash_redis_port: int = 6379
     upstash_redis_rest_url: str
     upstash_redis_rest_token: str
     scrape_update_channel: str = "scrape_update"

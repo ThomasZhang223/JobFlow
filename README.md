@@ -19,60 +19,83 @@ A full-stack job application tracker with automated job scraping capabilities. J
 - **Database**: Supabase (PostgreSQL)
 - **Task Queue**: Celery with Redis
 - **Auth**: Supabase Authentication (JWT)
+- **Containerization**: Docker Compose
 
 ## Quick Setup
 
 ### Prerequisites
 
-- Node.js (v20.9.0+)
-- Python (3.10+)
-- Docker (for Redis)
+- Docker & Docker Compose
 
-### 1. Frontend
+### 1. Environment Variables
 
-```bash
-cd frontend/masa
-npm install
-npm run dev
-# Access at http://localhost:3000
-```
-
-### 2. Backend
-
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
-# Create .env file with your credentials
-fastapi dev app/main.py
-# Access API at http://localhost:8000
-```
-
-### 3. Redis
-
-```bash
-docker run -d --name jobflow-redis -p 6379:6379 redis:latest
-```
-
-### 4. Celery Worker
-
-```bash
-cd backend
-source venv/bin/activate
-celery -A worker.celery_app worker --loglevel=info
-```
-
-## Environment Variables
-
-Create a `.env` file in `backend/`:
+Create a `.env` file in the project root:
 
 ```env
+# Database
 SUPABASE_URL=your_supabase_url
 SUPABASE_KEY=your_supabase_key
-REDIS_URL=redis://localhost:6379/0
-ALLOWED_ORIGINS=["http://localhost:3000"]
+
+# Email
+EMAIL_PASSWORD=your_email_password
+
+# Proxies (for scraping, optional)
+PROXY_STR=["proxy1:port","proxy2:port"]
+PROXY_USERNAME=your_proxy_username
+PROXY_PASSWORD=your_proxy_password
+```
+
+> **Note**: Do NOT use quotes around values. Docker's `env_file` includes quotes literally.
+
+### 2. Run with Docker Compose
+
+```bash
+docker compose up --build
+```
+
+This starts all services:
+- **Frontend**: http://localhost:3000
+- **API**: http://localhost:8000
+- **Redis**: Internal container (not exposed to host)
+- **Celery Worker**: Background job processing
+
+### Other Docker Commands
+
+```bash
+# Run in background
+docker compose up -d --build
+
+# Stop all services
+docker compose down
+
+# View logs
+docker compose logs -f
+
+# View logs for specific service
+docker compose logs -f api
+
+# Rebuild a specific service
+docker compose up -d --build api
+```
+
+## Architecture
+
+```
+┌─────────────────┐     ┌─────────────────┐
+│   Frontend      │────▶│   FastAPI       │
+│   (Next.js)     │     │   (API)         │
+│   :3000         │◀────│   :8000         │
+└─────────────────┘     └────────┬────────┘
+                                 │
+                        ┌────────▼────────┐
+                        │     Redis       │
+                        │   (Pub/Sub)     │
+                        └────────┬────────┘
+                                 │
+                        ┌────────▼────────┐
+                        │  Celery Worker  │
+                        │  (Scraping)     │
+                        └─────────────────┘
 ```
 
 ## Deployment

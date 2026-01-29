@@ -26,6 +26,7 @@ def publish_update(message):
     try:
         import redis
 
+        """
         # Read Redis settings from environment variables
         upstash_redis_rest_url = os.environ.get('UPSTASH_REDIS_REST_URL')
         upstash_redis_rest_token = os.environ.get('UPSTASH_REDIS_REST_TOKEN')
@@ -38,10 +39,15 @@ def publish_update(message):
 
         # Build TCP connection URL (same as backend)
         connection_url = f"rediss://:{upstash_redis_rest_token}@{upstash_redis_rest_url[8:]}:{upstash_redis_port}?ssl_cert_reqs=required"
-
+        """
+        # Redis URL from environment (Docker) or fallback to localhost (local dev)
+        redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+        scrape_update_channel = os.environ.get('SCRAPE_UPDATE_CHANNEL', 'scrape_update')
+        
         # Create Redis client with TCP connection
-        r = redis.from_url(connection_url)
-
+        #r = redis.from_url(connection_url)
+        r = redis.from_url(redis_url)
+        
         message_json = json.dumps(message)
 
         # Publish via TCP (so backend subscriber receives it)
@@ -719,7 +725,7 @@ class IndeedSpider(scrapy.Spider):
                     'status': 'failed',
                     'jobs_found': self.jobs_scraped,
                     'error_message': str(failure.value),
-                    'spider_finished': False
+                    'spider_finished': True
                 }
                 publish_update(error_update)
             except Exception as e:

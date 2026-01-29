@@ -13,6 +13,8 @@ def get_proxy():
     proxy_username = os.environ.get('PROXY_USERNAME')
     proxy_password = os.environ.get('PROXY_PASSWORD')
 
+    print(f"DEBUG PROXY_STR raw value: {repr(proxy_str)}")
+
     if not proxy_str or not proxy_username or not proxy_password:
         raise ValueError("Missing proxy environment variables: PROXY_STR, PROXY_USERNAME, PROXY_PASSWORD")
 

@@ -9,6 +9,9 @@ from app.core.config import settings
 # Handler for async client methods, message recieved is passed to handler
 MessageHandler = Callable[[dict], Awaitable[None]]
 
+# For production Upstash (SSL):
+# url = f"rediss://:{settings.upstash_redis_rest_token}@{settings.upstash_redis_rest_url[8:]}:{settings.upstash_redis_port}?ssl_cert_reqs=required"
+
 class RedisClient:
     """
     Async Redis client defintion for pub/sub messages
@@ -16,8 +19,7 @@ class RedisClient:
     """
 
     def __init__(self):
-        # Build TCP connection URL for pub/sub (REST API doesn't support pub/sub)
-        self.url = f"rediss://:{settings.upstash_redis_rest_token}@{settings.upstash_redis_rest_url[8:]}:{settings.upstash_redis_port}?ssl_cert_reqs=required"
+        self.url = settings.redis_url
         self.redis = None
         self.pubsub = None
         self.subscriber_task = None

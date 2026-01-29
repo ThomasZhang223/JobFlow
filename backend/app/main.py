@@ -15,6 +15,7 @@ from app.core.websocket_manager import websocket_manager
 
 async def handle_scrape_update(message: dict):
     # Validate message recieved from Celery with schema, then forward to websocket
+    print(f"📨 Received scrape update: {message}")  # Debug log
     try:
         update = ScrapeUpdateMessage.model_validate(message)
     except ValidationError as e:
@@ -52,7 +53,7 @@ async def lifespan(app: FastAPI):
     print("\nShutdown API\n")
 
 app = FastAPI (
-    title = "MASA",
+    title = "JobFlow",
     description = "Auto job application",
     version = "1.0.0",
     lifespan=lifespan,
